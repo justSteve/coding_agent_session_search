@@ -1,5 +1,6 @@
 use crate::model::types::{Conversation, Message, MessageRole, Workspace};
 use crate::storage::sqlite::SqliteStorage;
+use crate::ui::components::theme::ThemePalette;
 use anyhow::Result;
 
 #[derive(Clone, Debug)]
@@ -58,13 +59,13 @@ pub fn load_conversation(
     Ok(None)
 }
 
-pub fn role_style(role: &MessageRole) -> ratatui::style::Style {
-    use ratatui::style::{Color, Style};
+pub fn role_style(role: &MessageRole, palette: ThemePalette) -> ratatui::style::Style {
+    use ratatui::style::Style;
     match role {
-        MessageRole::User => Style::default().fg(Color::Green),
-        MessageRole::Agent => Style::default().fg(Color::Cyan),
-        MessageRole::Tool => Style::default().fg(Color::Magenta),
-        MessageRole::System => Style::default().fg(Color::Yellow),
-        MessageRole::Other(_) => Style::default().fg(Color::Gray),
+        MessageRole::User => Style::default().fg(palette.user),
+        MessageRole::Agent => Style::default().fg(palette.agent),
+        MessageRole::Tool => Style::default().fg(palette.tool),
+        MessageRole::System => Style::default().fg(palette.system),
+        MessageRole::Other(_) => Style::default().fg(palette.hint),
     }
 }

@@ -166,7 +166,7 @@ fn format_ts(ms: i64) -> String {
 
 pub fn footer_legend(show_help: bool) -> &'static str {
     if show_help {
-        "q/esc quit • arrows/PgUp/PgDn navigate • / focus query • a agent • w workspace • f from • t to • x clear • tab detail • h theme • o open"
+        "q/esc quit • arrows/PgUp/PgDn navigate • / focus query • a agent • w workspace • f from • t to • x clear • A/W/F clear-one • tab detail • h theme • o open"
     } else {
         "?/hide help | a agent | w workspace | f from | t to | x clear | tab detail | h theme | o open | q quit"
     }
@@ -217,6 +217,8 @@ pub fn run_tui() -> Result<()> {
     let mut cached_detail: Option<(String, ConversationView)> = None;
     let mut last_query = String::new();
     let mut needs_draw = true;
+    let editor_cmd = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+    let editor_line_flag = std::env::var("EDITOR_LINE_FLAG").unwrap_or_else(|_| "+".into());
 
     loop {
         if needs_draw {
@@ -256,7 +258,7 @@ pub fn run_tui() -> Result<()> {
                 if !filters.agents.is_empty() {
                     pill_spans.push(Span::styled(
                         format!(
-                            "agent:{}",
+                            "[a] agent:{}",
                             filters.agents.iter().cloned().collect::<Vec<_>>().join("|")
                         ),
                         Style::default()
@@ -268,7 +270,7 @@ pub fn run_tui() -> Result<()> {
                 if !filters.workspaces.is_empty() {
                     pill_spans.push(Span::styled(
                         format!(
-                            "ws:{}",
+                            "[w] ws:{}",
                             filters
                                 .workspaces
                                 .iter()
@@ -282,7 +284,10 @@ pub fn run_tui() -> Result<()> {
                 }
                 if filters.created_from.is_some() || filters.created_to.is_some() {
                     pill_spans.push(Span::styled(
-                        format!("time:{:?}->{:?}", filters.created_from, filters.created_to),
+                        format!(
+                            "[f/t] time:{:?}->{:?}",
+                            filters.created_from, filters.created_to
+                        ),
                         Style::default().fg(palette.accent_alt),
                     ));
                 }
@@ -409,7 +414,7 @@ pub fn run_tui() -> Result<()> {
                                     lines.push(Line::from(vec![
                                         Span::styled(
                                             format!("[{role_label}]"),
-                                            role_style(&msg.role),
+                                            role_style(&msg.role, palette),
                                         ),
                                         Span::raw(ts),
                                     ]));
@@ -448,10 +453,71 @@ pub fn run_tui() -> Result<()> {
                                 Paragraph::new(hit.content.clone()).wrap(Wrap { trim: true })
                             }
                         }
-                        DetailTab::Snippets => Paragraph::new("No snippets indexed yet.")
-                            .style(Style::default().fg(palette.hint)),
-                        DetailTab::Raw => Paragraph::new(format!("Path: {}", hit.source_path))
-                            .wrap(Wrap { trim: true }),
+                        DetailTab::Snippets => {
+                            if let Some(full) = detail {
+                                let mut lines = Vec::new();
+                                for (msg_idx, msg) in full.messages.iter().enumerate() {
+                                    for snip in &msg.snippets {
+                                        let file = snip
+                                            .file_path
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "<unknown file>".into());
+                                        let range = match (snip.start_line, snip.end_line) {
+                                            (Some(s), Some(e)) => format!("{s}-{e}"),
+                                            (Some(s), None) => s.to_string(),
+                                            _ => "-".into(),
+                                        };
+                                        lines.push(Line::from(vec![
+                                            Span::styled(file, palette.title()),
+                                            Span::raw(format!(":{range} ")),
+                                            Span::styled(
+                                                format!("msg#{msg_idx} "),
+                                                role_style(&msg.role, palette),
+                                            ),
+                                        ]));
+                                        if let Some(text) = &snip.snippet_text {
+                                            for l in text.lines() {
+                                                lines.push(Line::from(Span::raw(format!("  {l}"))));
+                                            }
+                                        }
+                                        lines.push(Line::from(""));
+                                    }
+                                }
+                                if lines.is_empty() {
+                                    Paragraph::new("No snippets attached.")
+                                        .style(Style::default().fg(palette.hint))
+                                } else {
+                                    Paragraph::new(lines).wrap(Wrap { trim: true })
+                                }
+                            } else {
+                                Paragraph::new("No snippets loaded")
+                                    .style(Style::default().fg(palette.hint))
+                            }
+                        }
+                        DetailTab::Raw => {
+                            if let Some(full) = detail {
+                                let meta = serde_json::to_string_pretty(&full.convo.metadata_json)
+                                    .unwrap_or_else(|_| "<invalid metadata>".into());
+                                let mut text = String::new();
+                                text.push_str(&format!(
+                                    "Path: {}\n",
+                                    full.convo.source_path.display()
+                                ));
+                                if let Some(ws) = &full.workspace {
+                                    text.push_str(&format!("Workspace: {}\n", ws.path.display()));
+                                }
+                                if let Some(ext) = &full.convo.external_id {
+                                    text.push_str(&format!("External ID: {ext}\n"));
+                                }
+                                text.push_str("Metadata:\n");
+                                text.push_str(&meta);
+                                Paragraph::new(text).wrap(Wrap { trim: true })
+                            } else {
+                                Paragraph::new(format!("Path: {}", hit.source_path))
+                                    .wrap(Wrap { trim: true })
+                            }
+                        }
                     }
                     .block(Block::default().title("Detail").borders(Borders::ALL));
 
@@ -546,6 +612,29 @@ pub fn run_tui() -> Result<()> {
                         page = 0;
                         status = "Filters cleared".to_string();
                         dirty_since = Some(Instant::now());
+                        needs_draw = true;
+                    }
+                    KeyCode::Char('A') => {
+                        filters.agents.clear();
+                        page = 0;
+                        status = "Agent filter cleared".to_string();
+                        dirty_since = Some(Instant::now());
+                        needs_draw = true;
+                    }
+                    KeyCode::Char('W') => {
+                        filters.workspaces.clear();
+                        page = 0;
+                        status = "Workspace filter cleared".to_string();
+                        dirty_since = Some(Instant::now());
+                        needs_draw = true;
+                    }
+                    KeyCode::Char('F') => {
+                        filters.created_from = None;
+                        filters.created_to = None;
+                        page = 0;
+                        status = "Time filter cleared".to_string();
+                        dirty_since = Some(Instant::now());
+                        needs_draw = true;
                     }
                     KeyCode::PageDown | KeyCode::Char(']') => {
                         page = page.saturating_add(1);
@@ -564,9 +653,22 @@ pub fn run_tui() -> Result<()> {
                     KeyCode::Char('o') => {
                         if let Some(hit) = selected.and_then(|idx| results.get(idx)) {
                             let path = &hit.source_path;
-                            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".into());
-                            let _ = StdCommand::new(editor).arg(path).status();
+                            let line_hint = hit
+                                .snippet
+                                .find("line ")
+                                .and_then(|i| hit.snippet[i + 5..].split_whitespace().next())
+                                .and_then(|s| s.parse::<usize>().ok());
+                            let mut cmd = StdCommand::new(&editor_cmd);
+                            if let Some(line) = line_hint {
+                                cmd.arg(format!("{}{}", editor_line_flag, line));
+                            }
+                            let _ = cmd.arg(path).status();
                         }
+                    }
+                    KeyCode::Char('E') => {
+                        input_mode = InputMode::Query;
+                        status = "Set editor command (current: $EDITOR) not implemented; set env EDITOR/EDITOR_LINE_FLAG before launch."
+                            .to_string();
                     }
                     KeyCode::Char('?') => {
                         show_help = !show_help;
