@@ -158,16 +158,14 @@ fn watch_roots() -> Vec<PathBuf> {
 
 fn reset_storage(storage: &mut SqliteStorage) -> Result<()> {
     storage.raw().execute_batch(
-        r#""
-        DELETE FROM fts_messages;
-        DELETE FROM snippets;
-        DELETE FROM messages;
-        DELETE FROM conversations;
-        DELETE FROM agents;
-        DELETE FROM workspaces;
-        DELETE FROM tags;
-        DELETE FROM conversation_tags;
-    ""#,
+        "DELETE FROM fts_messages;
+         DELETE FROM snippets;
+         DELETE FROM messages;
+         DELETE FROM conversations;
+         DELETE FROM agents;
+         DELETE FROM workspaces;
+         DELETE FROM tags;
+         DELETE FROM conversation_tags;",
     )?;
     Ok(())
 }
@@ -188,7 +186,7 @@ fn reindex_paths(
 
     let triggers = classify_paths(paths);
     if triggers.is_empty() {
-        return Ok(())
+        return Ok(());
     }
 
     for (kind, ts) in triggers {
@@ -598,7 +596,7 @@ mod tests {
             db_path: data_dir.join("agent_search.db"),
             data_dir: data_dir.clone(),
         };
-        
+
         // Manually set up dependencies for reindex_paths
         let storage = SqliteStorage::open(&opts.db_path).unwrap();
         let t_index = TantivyIndex::open_or_create(&index_dir(&opts.data_dir).unwrap()).unwrap();
@@ -606,8 +604,15 @@ mod tests {
         let state = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         let storage = std::sync::Arc::new(std::sync::Mutex::new(storage));
         let t_index = std::sync::Arc::new(std::sync::Mutex::new(t_index));
-        
-        reindex_paths(&opts, vec![amp_file.clone()], state.clone(), storage, t_index).unwrap();
+
+        reindex_paths(
+            &opts,
+            vec![amp_file.clone()],
+            state.clone(),
+            storage,
+            t_index,
+        )
+        .unwrap();
 
         let loaded = load_watch_state(&data_dir);
         assert!(loaded.contains_key(&ConnectorKind::Amp));
