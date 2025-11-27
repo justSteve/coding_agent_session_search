@@ -1504,6 +1504,10 @@ pub fn run_tui(
     let state_path = state_path_for(&data_dir);
     let persisted = load_state(&state_path);
     let search_client = SearchClient::open(&index_path, Some(&db_path))?;
+    // Open a read-only connection for the UI to fetch details efficiently.
+    // If DB doesn't exist yet (first run), this will be None, which is fine as we can't view details anyway.
+    let db_reader = crate::storage::sqlite::SqliteStorage::open_readonly(&db_path).ok();
+
     let index_ready = search_client.is_some();
     let mut status = if index_ready {
         format!(
@@ -1926,7 +1930,11 @@ pub fn run_tui(
                     {
                         cached_detail.as_ref().map(|(_, d)| d.clone())
                     } else {
-                        let loaded = load_conversation(&db_path, &hit.source_path).ok().flatten();
+                        let loaded = if let Some(storage) = &db_reader {
+                            load_conversation(storage, &hit.source_path).ok().flatten()
+                        } else {
+                            None
+                        };
                         if let Some(d) = &loaded {
                             cached_detail = Some((hit.source_path.clone(), d.clone()));
                             // Reset scroll when loading new conversation
