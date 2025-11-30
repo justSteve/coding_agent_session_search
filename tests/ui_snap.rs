@@ -637,7 +637,7 @@ fn stripe_colors_allow_highlight_visibility() {
 // ============================================================
 
 use coding_agent_search::model::types::MessageRole;
-use coding_agent_search::ui::data::{role_style, InputMode};
+use coding_agent_search::ui::data::{InputMode, role_style};
 
 #[test]
 fn input_mode_has_detail_find_variant() {

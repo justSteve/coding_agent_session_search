@@ -126,13 +126,19 @@ fn search_returns_json_results() {
     // Verify structure
     assert!(json["count"].is_number(), "JSON should have count field");
     assert!(json["hits"].is_array(), "JSON should have hits array");
-    assert!(json["count"].as_u64().unwrap() > 0, "Should find results for 'hello'");
+    assert!(
+        json["count"].as_u64().unwrap() > 0,
+        "Should find results for 'hello'"
+    );
 
     // Verify hit structure
     let hits = json["hits"].as_array().unwrap();
     let first_hit = &hits[0];
     assert!(first_hit["agent"].is_string(), "Hit should have agent");
-    assert!(first_hit["source_path"].is_string(), "Hit should have source_path");
+    assert!(
+        first_hit["source_path"].is_string(),
+        "Hit should have source_path"
+    );
     assert!(first_hit["score"].is_number(), "Hit should have score");
 }
 
@@ -156,7 +162,10 @@ fn search_respects_limit() {
     let json: Value = serde_json::from_str(stdout.trim()).expect("valid JSON");
 
     let hits = json["hits"].as_array().expect("hits array");
-    assert!(hits.len() <= 1, "Limit should restrict results to at most 1");
+    assert!(
+        hits.len() <= 1,
+        "Limit should restrict results to at most 1"
+    );
 }
 
 #[test]
@@ -230,7 +239,10 @@ fn search_writes_trace_on_success() {
     // Parse last line as JSON
     let last_line = trace.lines().last().expect("trace has lines");
     let json: Value = serde_json::from_str(last_line).expect("valid trace JSON");
-    assert_eq!(json["exit_code"], 0, "Successful search should have exit_code 0");
+    assert_eq!(
+        json["exit_code"], 0,
+        "Successful search should have exit_code 0"
+    );
     assert_eq!(json["contract_version"], "1");
 }
 
@@ -278,6 +290,10 @@ fn search_robot_format_is_valid_json_lines() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // Robot mode should output JSON (same as --json)
-    let json: Value = serde_json::from_str(stdout.trim()).expect("robot output should be valid JSON");
-    assert!(json["hits"].is_array(), "Robot output should have hits array");
+    let json: Value =
+        serde_json::from_str(stdout.trim()).expect("robot output should be valid JSON");
+    assert!(
+        json["hits"].is_array(),
+        "Robot output should have hits array"
+    );
 }
