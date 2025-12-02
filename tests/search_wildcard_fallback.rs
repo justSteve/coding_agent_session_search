@@ -1,4 +1,3 @@
-use coding_agent_search::connectors::{NormalizedConversation, NormalizedMessage};
 use coding_agent_search::search::query::{MatchType, SearchClient, SearchFilters};
 use coding_agent_search::search::tantivy::TantivyIndex;
 use tempfile::TempDir;
@@ -11,25 +10,14 @@ fn implicit_wildcard_fallback_finds_substrings() {
     let mut index = TantivyIndex::open_or_create(dir.path()).unwrap();
 
     // Seed index with "apple"
-    let conv = NormalizedConversation {
-        agent_slug: "tester".into(),
-        external_id: None,
-        title: Some("fruit test".into()),
-        workspace: Some(std::path::PathBuf::from("/tmp")),
-        source_path: dir.path().join("log.jsonl"),
-        started_at: Some(1000),
-        ended_at: None,
-        metadata: serde_json::json!({}),
-        messages: vec![NormalizedMessage {
-            idx: 0,
-            role: "user".into(),
-            author: None,
-            created_at: Some(1000),
-            content: "I like eating an apple everyday".into(),
-            extra: serde_json::json!({}),
-            snippets: vec![],
-        }],
-    };
+    let conv = util::ConversationFixtureBuilder::new("tester")
+        .title("fruit test")
+        .source_path(dir.path().join("log.jsonl"))
+        .base_ts(1000)
+        .messages(1)
+        .with_content(0, "I like eating an apple everyday")
+        .build_normalized();
+
     index.add_conversation(&conv).unwrap();
     index.commit().unwrap();
 
@@ -42,7 +30,9 @@ fn implicit_wildcard_fallback_finds_substrings() {
     // Exact match "pple" -> 0 hits.
     // Fallback to "*pple*" -> should find "apple".
     // We use sparse_threshold=1 to force fallback if < 1 result.
-    let result = client.search_with_fallback("pple", filters.clone(), 10, 0, 1).unwrap();
+    let result = client
+        .search_with_fallback("pple", filters.clone(), 10, 0, 1)
+        .unwrap();
     let hits = result.hits;
 
     assert_eq!(hits.len(), 1, "Should find 'apple' via fallback for 'pple'");
@@ -58,25 +48,14 @@ fn explicit_wildcard_works_without_fallback() {
     let dir = TempDir::new().unwrap();
     let mut index = TantivyIndex::open_or_create(dir.path()).unwrap();
 
-    let conv = NormalizedConversation {
-        agent_slug: "tester".into(),
-        external_id: None,
-        title: Some("wild test".into()),
-        workspace: Some(std::path::PathBuf::from("/tmp")),
-        source_path: dir.path().join("log.jsonl"),
-        started_at: Some(1000),
-        ended_at: None,
-        metadata: serde_json::json!({}),
-        messages: vec![NormalizedMessage {
-            idx: 0,
-            role: "user".into(),
-            author: None,
-            created_at: Some(1000),
-            content: "config_file_v2.json".into(),
-            extra: serde_json::json!({}),
-            snippets: vec![],
-        }],
-    };
+    let conv = util::ConversationFixtureBuilder::new("tester")
+        .title("wild test")
+        .source_path(dir.path().join("log.jsonl"))
+        .base_ts(1000)
+        .messages(1)
+        .with_content(0, "config_file_v2.json")
+        .build_normalized();
+
     index.add_conversation(&conv).unwrap();
     index.commit().unwrap();
 

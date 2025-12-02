@@ -969,8 +969,11 @@ fn help_lines(palette: ThemePalette) -> Vec<Line<'static>> {
     lines.extend(add_section(
         "States",
         &[
-            "match mode + context persist in tui_state.json (data dir); delete to reset"
-                .to_string(),
+            "UI state persists in tui_state.json (data dir).".to_string(),
+            format!(
+                "{} reset UI state (deletes tui_state.json) or launch with `cass tui --reset-state`",
+                shortcuts::RESET_STATE
+            ),
         ],
     ));
     lines.extend(add_section(
@@ -1871,6 +1874,7 @@ fn contextual_shortcuts(
         InputMode::Query => match focus_region {
             FocusRegion::Results => vec![
                 ("Ctrl+P".into(), "Palette".into()),
+                (shortcuts::VIM_NAV.into(), "Nav".into()),
                 (shortcuts::DETAIL_OPEN.into(), "Open detail".into()),
                 ("m".into(), "Select".into()),
                 (shortcuts::BULK_MENU.into(), "Bulk menu".into()),
@@ -2198,6 +2202,7 @@ fn footer_shortcuts(max_width: usize) -> String {
         "F12 rank",
         "Ctrl+R hist",
         "Ctrl+Shift+R refresh",
+        "Ctrl+Shift+Del reset",
         "F2 theme",
         "Esc quit",
         "F1 help",
@@ -2235,14 +2240,24 @@ pub fn footer_legend(show_help: bool) -> &'static str {
 pub fn run_tui(
     data_dir_override: Option<std::path::PathBuf>,
     once: bool,
+    reset_state: bool,
     progress: Option<std::sync::Arc<crate::indexer::IndexingProgress>>,
 ) -> Result<()> {
+    // Resolve data dir early so we can honor reset-state in headless mode too.
+    let data_dir = data_dir_override.unwrap_or_else(default_data_dir);
+    let state_path = state_path_for(&data_dir);
+
+    // Optional: wipe persisted UI state before loading defaults.
+    if reset_state {
+        let _ = std::fs::remove_file(&state_path);
+    }
+
     if once
         && std::env::var("TUI_HEADLESS")
             .map(|v| v == "1")
             .unwrap_or(false)
     {
-        return run_tui_headless(data_dir_override);
+        return run_tui_headless(Some(data_dir));
     }
 
     let mut stdout = io::stdout();
@@ -2251,10 +2266,8 @@ pub fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let data_dir = data_dir_override.unwrap_or_else(default_data_dir);
     let index_path = index_dir(&data_dir)?;
     let db_path = default_db_path_for(&data_dir);
-    let state_path = state_path_for(&data_dir);
     let persisted = load_state(&state_path);
     let search_client = SearchClient::open(&index_path, Some(&db_path))?;
     // Open a read-only connection for the UI to fetch details efficiently.
@@ -2273,6 +2286,10 @@ pub fn run_tui(
             index_path.display()
         )
     };
+
+    if reset_state {
+        status = format!("State reset (tui_state.json cleared). {}", status);
+    }
 
     let mut query = String::new();
     let mut filters = SearchFilters::default();
@@ -2757,7 +2774,6 @@ pub fn run_tui(
                     let visible_end = (safe_scroll_offset + MAX_VISIBLE_PANES).min(panes.len());
                     let visible_panes: Vec<&AgentPane> =
                         panes[safe_scroll_offset..visible_end].iter().collect();
-                    let hidden_count = panes.len().saturating_sub(MAX_VISIBLE_PANES);
 
                     let pane_width = (100 / std::cmp::max(visible_panes.len(), 1)) as u16;
                     let pane_constraints: Vec<Constraint> = visible_panes
@@ -3025,27 +3041,40 @@ pub fn run_tui(
                         }
                     }
 
-                    // Show "+N more" indicator if there are hidden panes
-                    if hidden_count > 0 {
-                        let indicator =
-                            format!(" [{} of {} agents] ", visible_panes.len(), panes.len());
-                        let indicator_span = Span::styled(
-                            indicator,
-                            Style::default()
-                                .fg(palette.hint)
-                                .add_modifier(Modifier::DIM),
+                    // Render hidden pane directional indicators (arrows)
+                    if safe_scroll_offset > 0 {
+                        let text = format!("◀ +{}", safe_scroll_offset);
+                        let area = Rect::new(results_area.x, results_area.y, text.len() as u16, 1);
+                        f.render_widget(
+                            Span::styled(
+                                text,
+                                Style::default()
+                                    .fg(palette.accent)
+                                    .bg(palette.bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            area,
                         );
-                        // Render in bottom-right corner of results area
-                        let indicator_area = Rect::new(
-                            results_area.x
-                                + results_area
-                                    .width
-                                    .saturating_sub(indicator_span.content.len() as u16 + 2),
-                            results_area.y + results_area.height.saturating_sub(1),
-                            indicator_span.content.len() as u16 + 2,
+                    }
+                    if visible_end < panes.len() {
+                        let diff = panes.len() - visible_end;
+                        let text = format!("+{} ▶", diff);
+                        let area = Rect::new(
+                            results_area.x + results_area.width.saturating_sub(text.len() as u16),
+                            results_area.y,
+                            text.len() as u16,
                             1,
                         );
-                        f.render_widget(Paragraph::new(indicator_span), indicator_area);
+                        f.render_widget(
+                            Span::styled(
+                                text,
+                                Style::default()
+                                    .fg(palette.accent)
+                                    .bg(palette.bg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            area,
+                        );
                     }
 
                     // Show "indexing in progress" warning when we have results but indexing is active
@@ -4622,7 +4651,10 @@ pub fn run_tui(
                                 break;
                             }
                         }
-                        KeyCode::Down => {
+                        KeyCode::Down | KeyCode::Char('j')
+                            if key.code == KeyCode::Down
+                                || key.modifiers.contains(KeyModifiers::ALT) =>
+                        {
                             match focus_region {
                                 FocusRegion::Results => {
                                     if panes.is_empty()
@@ -4647,7 +4679,10 @@ pub fn run_tui(
                                 }
                             }
                         }
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('k')
+                            if key.code == KeyCode::Up
+                                || key.modifiers.contains(KeyModifiers::ALT) =>
+                        {
                             match focus_region {
                                 FocusRegion::Results => {
                                     if panes.is_empty()
@@ -4671,24 +4706,32 @@ pub fn run_tui(
                                 }
                             }
                         }
-                        KeyCode::Left => match focus_region {
-                            FocusRegion::Results => {
-                                active_pane = active_pane.saturating_sub(1);
-                                // Scroll pane view if active moves before visible range
-                                if active_pane < pane_scroll_offset {
-                                    pane_scroll_offset = active_pane;
+                        KeyCode::Left | KeyCode::Char('h')
+                            if key.code == KeyCode::Left
+                                || key.modifiers.contains(KeyModifiers::ALT) =>
+                        {
+                            match focus_region {
+                                FocusRegion::Results => {
+                                    active_pane = active_pane.saturating_sub(1);
+                                    // Scroll pane view if active moves before visible range
+                                    if active_pane < pane_scroll_offset {
+                                        pane_scroll_offset = active_pane;
+                                    }
+                                    focus_flash_until =
+                                        Some(Instant::now() + Duration::from_millis(220));
+                                    cached_detail = None;
+                                    detail_scroll = 0;
                                 }
-                                focus_flash_until =
-                                    Some(Instant::now() + Duration::from_millis(220));
-                                cached_detail = None;
-                                detail_scroll = 0;
+                                FocusRegion::Detail => {
+                                    focus_region = FocusRegion::Results;
+                                    status = "Focus: Results".to_string();
+                                }
                             }
-                            FocusRegion::Detail => {
-                                focus_region = FocusRegion::Results;
-                                status = "Focus: Results".to_string();
-                            }
-                        },
-                        KeyCode::Right => {
+                        }
+                        KeyCode::Right | KeyCode::Char('l')
+                            if key.code == KeyCode::Right
+                                || key.modifiers.contains(KeyModifiers::ALT) =>
+                        {
                             match focus_region {
                                 FocusRegion::Results => {
                                     if active_pane + 1 < panes.len() {
@@ -5022,6 +5065,45 @@ pub fn run_tui(
                                 }
                             );
                             dirty_since = Some(Instant::now());
+                        }
+                        KeyCode::Delete
+                            if key
+                                .modifiers
+                                .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+                        {
+                            let removed = std::fs::remove_file(&state_path).is_ok();
+                            // Restore runtime defaults
+                            match_mode = MatchMode::Prefix;
+                            context_window = ContextWindow::Medium;
+                            density_mode = DensityMode::Cozy;
+                            let height = terminal.size().map(|r| r.height).unwrap_or(24);
+                            per_pane_limit = calculate_pane_limit(height, density_mode);
+                            filters = SearchFilters::default();
+                            pane_filter = None;
+                            page = 0;
+                            active_pane = 0;
+                            pane_scroll_offset = 0;
+                            detail_scroll = 0;
+                            cached_detail = None;
+                            detail_find = None;
+                            query_history.clear();
+                            history_cursor = None;
+                            saved_views.clear();
+                            help_pinned = false;
+                            show_help = true;
+                            help_last_interaction = Instant::now();
+                            selected.clear();
+                            panes.clear();
+                            results.clear();
+                            dirty_since = Some(Instant::now());
+                            status = if removed {
+                                "UI state reset: deleted tui_state.json and restored defaults"
+                                    .to_string()
+                            } else {
+                                "UI state reset: defaults restored (state file not present)"
+                                    .to_string()
+                            };
+                            needs_draw = true;
                         }
                         KeyCode::Delete if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             filters = SearchFilters::default();
@@ -6261,5 +6343,280 @@ mod tests {
             !joined.contains("ago"),
             "detail pane should use absolute timestamps"
         );
+    }
+
+    // ==========================================================================
+    // Navigation State Tests (tst.ui.nav)
+    // Tests for TUI navigation state machine behavior
+    // ==========================================================================
+
+    #[test]
+    fn context_window_cycles_through_all_sizes() {
+        let mut window = ContextWindow::Small;
+        assert_eq!(window.size(), 80);
+
+        window = window.next();
+        assert_eq!(window, ContextWindow::Medium);
+        assert_eq!(window.size(), 160);
+
+        window = window.next();
+        assert_eq!(window, ContextWindow::Large);
+        assert_eq!(window.size(), 320);
+
+        window = window.next();
+        assert_eq!(window, ContextWindow::XLarge);
+        assert_eq!(window.size(), 640);
+
+        // Wraps back to Small
+        window = window.next();
+        assert_eq!(window, ContextWindow::Small);
+        assert_eq!(window.size(), 80);
+    }
+
+    #[test]
+    fn density_mode_cycles_through_all_options() {
+        let mut mode = DensityMode::Compact;
+        assert_eq!(mode.lines_per_item(), 2);
+
+        mode = mode.next();
+        assert_eq!(mode, DensityMode::Cozy);
+        assert_eq!(mode.lines_per_item(), 4);
+
+        mode = mode.next();
+        assert_eq!(mode, DensityMode::Spacious);
+        assert_eq!(mode.lines_per_item(), 6);
+
+        // Wraps back to Compact
+        mode = mode.next();
+        assert_eq!(mode, DensityMode::Compact);
+        assert_eq!(mode.lines_per_item(), 2);
+    }
+
+    #[test]
+    fn ranking_mode_has_all_variants() {
+        // RankingMode is cycled manually in key handler, test all variants exist
+        let modes = [
+            RankingMode::RecentHeavy,
+            RankingMode::Balanced,
+            RankingMode::RelevanceHeavy,
+            RankingMode::MatchQualityHeavy,
+            RankingMode::DateNewest,
+            RankingMode::DateOldest,
+        ];
+        assert_eq!(modes.len(), 6, "should have 6 ranking modes");
+
+        // Test that they are all distinct
+        for (i, a) in modes.iter().enumerate() {
+            for (j, b) in modes.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "all ranking modes should be distinct");
+                }
+            }
+        }
+    }
+
+    fn make_hit(agent: &str, path: &str, score: f32, snippet: &str) -> SearchHit {
+        SearchHit {
+            title: "Test".into(),
+            snippet: snippet.into(),
+            content: "content".into(),
+            score,
+            source_path: path.into(),
+            agent: agent.into(),
+            workspace: "".into(),
+            created_at: None,
+            line_number: None,
+            match_type: crate::search::query::MatchType::default(),
+        }
+    }
+
+    #[test]
+    fn build_agent_panes_groups_by_agent() {
+        let hits = vec![
+            make_hit("codex", "/a", 8.0, "snippet"),
+            make_hit("claude_code", "/b", 7.0, "snippet"),
+            make_hit("codex", "/c", 6.0, "snippet"),
+        ];
+
+        let panes = build_agent_panes(&hits, 10);
+        assert_eq!(panes.len(), 2, "should have 2 agent panes");
+        assert_eq!(panes[0].agent, "codex");
+        assert_eq!(panes[0].hits.len(), 2);
+        assert_eq!(panes[1].agent, "claude_code");
+        assert_eq!(panes[1].hits.len(), 1);
+    }
+
+    #[test]
+    fn build_agent_panes_respects_per_pane_limit() {
+        let hits: Vec<SearchHit> = (0..10)
+            .map(|i| make_hit("codex", &format!("/path/{}", i), 5.0, "snippet"))
+            .collect();
+
+        let panes = build_agent_panes(&hits, 3);
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].hits.len(), 3, "should respect per_pane_limit");
+        assert_eq!(panes[0].total_count, 10, "should track total count");
+    }
+
+    #[test]
+    fn build_agent_panes_empty_input_returns_empty() {
+        let panes = build_agent_panes(&[], 10);
+        assert!(panes.is_empty());
+    }
+
+    #[test]
+    fn build_agent_panes_initializes_selection_to_zero() {
+        let hits = vec![make_hit("codex", "/a", 5.0, "snippet")];
+
+        let panes = build_agent_panes(&hits, 10);
+        assert_eq!(panes[0].selected, 0);
+    }
+
+    #[test]
+    fn rebuild_panes_with_filter_maintains_selection_on_same_agent() {
+        let hits = vec![
+            make_hit("codex", "/a", 8.0, "snippet"),
+            make_hit("claude_code", "/b", 7.0, "snippet"),
+        ];
+
+        let mut active_pane: usize = 1; // Start on claude_code
+        let mut scroll_offset: usize = 0;
+
+        let panes = rebuild_panes_with_filter(
+            &hits,
+            None,
+            10,
+            &mut active_pane,
+            &mut scroll_offset,
+            Some("claude_code".into()),
+            Some("/b".into()),
+            5,
+        );
+
+        assert_eq!(panes.len(), 2);
+        assert_eq!(active_pane, 1, "should stay on claude_code pane");
+    }
+
+    #[test]
+    fn rebuild_panes_with_filter_falls_back_when_agent_disappears() {
+        let hits = vec![make_hit("codex", "/a", 8.0, "snippet")];
+
+        let mut active_pane: usize = 5; // Invalid index
+        let mut scroll_offset: usize = 0;
+
+        let _panes = rebuild_panes_with_filter(
+            &hits,
+            None,
+            10,
+            &mut active_pane,
+            &mut scroll_offset,
+            Some("nonexistent".into()),
+            None,
+            5,
+        );
+
+        assert_eq!(active_pane, 0, "should fall back to first pane");
+    }
+
+    #[test]
+    fn rebuild_panes_scroll_offset_adjusts_when_pane_out_of_view() {
+        let hits: Vec<SearchHit> = (0..10)
+            .map(|i| {
+                make_hit(
+                    &format!("agent{}", i),
+                    &format!("/path/{}", i),
+                    5.0,
+                    "snippet",
+                )
+            })
+            .collect();
+
+        let mut active_pane: usize = 0;
+        let mut scroll_offset: usize = 0;
+
+        let _panes = rebuild_panes_with_filter(
+            &hits,
+            None,
+            10,
+            &mut active_pane,
+            &mut scroll_offset,
+            Some("agent7".into()), // Agent at index 7
+            None,
+            3, // max_visible_panes
+        );
+
+        assert_eq!(active_pane, 7);
+        // Scroll offset should adjust to show pane 7 when only 3 are visible
+        assert!(
+            scroll_offset >= 5,
+            "scroll offset should adjust to show active pane"
+        );
+    }
+
+    #[test]
+    fn active_hit_returns_selected_item_in_pane() {
+        let panes = vec![AgentPane {
+            agent: "codex".into(),
+            hits: vec![
+                make_hit("codex", "/a", 8.0, "first"),
+                make_hit("codex", "/b", 7.0, "second"),
+            ],
+            selected: 1,
+            total_count: 2,
+        }];
+
+        let hit = active_hit(&panes, 0);
+        assert!(hit.is_some());
+        assert_eq!(hit.unwrap().snippet, "second");
+    }
+
+    #[test]
+    fn active_hit_returns_none_for_invalid_pane_index() {
+        let panes = vec![AgentPane {
+            agent: "codex".into(),
+            hits: vec![],
+            selected: 0,
+            total_count: 0,
+        }];
+
+        assert!(active_hit(&panes, 5).is_none());
+        assert!(active_hit(&[], 0).is_none());
+    }
+
+    #[test]
+    fn focus_region_toggles_between_results_and_detail() {
+        let focus = FocusRegion::Results;
+        assert_eq!(focus, FocusRegion::Results);
+
+        let focus = FocusRegion::Detail;
+        assert_eq!(focus, FocusRegion::Detail);
+    }
+
+    #[test]
+    fn match_mode_has_two_variants() {
+        let standard = MatchMode::Standard;
+        let prefix = MatchMode::Prefix;
+        assert_ne!(standard, prefix);
+    }
+
+    #[test]
+    fn agent_suggestions_returns_matching_agents() {
+        let suggestions = agent_suggestions("cl");
+        assert!(suggestions.contains(&"claude_code"));
+        assert!(suggestions.contains(&"cline"));
+        assert!(!suggestions.contains(&"codex"));
+    }
+
+    #[test]
+    fn agent_suggestions_case_insensitive() {
+        let suggestions = agent_suggestions("CL");
+        assert!(suggestions.contains(&"claude_code"));
+        assert!(suggestions.contains(&"cline"));
+    }
+
+    #[test]
+    fn agent_suggestions_empty_prefix_returns_all() {
+        let suggestions = agent_suggestions("");
+        assert_eq!(suggestions.len(), KNOWN_AGENTS.len());
     }
 }

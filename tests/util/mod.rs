@@ -111,6 +111,8 @@ impl TempFixtureDir {
     }
 }
 
+use std::collections::HashMap;
+
 /// Deterministic conversation/message generator for tests.
 #[derive(Debug, Clone)]
 pub struct ConversationFixtureBuilder {
@@ -122,6 +124,8 @@ pub struct ConversationFixtureBuilder {
     content_prefix: String,
     message_count: usize,
     snippets: Vec<SnippetSpec>,
+    custom_content: HashMap<usize, String>,
+    title: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -138,7 +142,14 @@ impl ConversationFixtureBuilder {
             content_prefix: "msg".into(),
             message_count: 2,
             snippets: Vec::new(),
+            custom_content: HashMap::new(),
+            title: None,
         }
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
     }
 
     pub fn external_id(mut self, id: impl Into<String>) -> Self {
@@ -168,6 +179,15 @@ impl ConversationFixtureBuilder {
 
     pub fn messages(mut self, count: usize) -> Self {
         self.message_count = count.max(1);
+        self
+    }
+
+    pub fn with_content(mut self, idx: usize, content: impl Into<String>) -> Self {
+        self.custom_content.insert(idx, content.into());
+        // Ensure message count covers this index
+        if idx >= self.message_count {
+            self.message_count = idx + 1;
+        }
         self
     }
 
@@ -204,6 +224,13 @@ impl ConversationFixtureBuilder {
                         snippet_text: s.text.clone(),
                     })
                     .collect();
+
+                let content = self
+                    .custom_content
+                    .get(&i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}-{}", self.content_prefix, i));
+
                 NormalizedMessage {
                     idx: i as i64,
                     role: if is_user { "user" } else { "assistant" }.into(),
@@ -213,7 +240,7 @@ impl ConversationFixtureBuilder {
                         Some("agent".into())
                     },
                     created_at: Some(self.base_ts + i as i64),
-                    content: format!("{}-{}", self.content_prefix, i),
+                    content,
                     extra: json!({"seed": i}),
                     snippets,
                 }
@@ -223,7 +250,9 @@ impl ConversationFixtureBuilder {
         NormalizedConversation {
             agent_slug: self.agent_slug.clone(),
             external_id: self.external_id.clone(),
-            title: Some(format!("{} conversation", self.agent_slug)),
+            title: self
+                .title
+                .or_else(|| Some(format!("{} conversation", self.agent_slug))),
             workspace: self.workspace.clone(),
             source_path: self.source_path.clone(),
             started_at: messages.first().and_then(|m| m.created_at),
@@ -255,6 +284,13 @@ impl ConversationFixtureBuilder {
                         snippet_text: s.text.clone(),
                     })
                     .collect();
+
+                let content = self
+                    .custom_content
+                    .get(&i)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}-{}", self.content_prefix, i));
+
                 Message {
                     id: None,
                     idx: i as i64,
@@ -265,7 +301,7 @@ impl ConversationFixtureBuilder {
                         Some("agent".into())
                     },
                     created_at: Some(self.base_ts + i as i64),
-                    content: format!("{}-{}", self.content_prefix, i),
+                    content,
                     extra_json: json!({"seed": i}),
                     snippets,
                 }
@@ -277,7 +313,9 @@ impl ConversationFixtureBuilder {
             agent_slug: self.agent_slug.clone(),
             workspace: self.workspace.clone(),
             external_id: self.external_id.clone(),
-            title: Some(format!("{} conversation", self.agent_slug)),
+            title: self
+                .title
+                .or_else(|| Some(format!("{} conversation", self.agent_slug))),
             source_path: self.source_path.clone(),
             started_at: messages.first().and_then(|m| m.created_at),
             ended_at: messages.last().and_then(|m| m.created_at),

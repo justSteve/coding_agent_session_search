@@ -108,3 +108,171 @@ fn index_force_rebuild_flag() {
     cmd.assert().success();
     assert!(data_dir.join("agent_search.db").exists());
 }
+
+/// Creates a Codex session file with the modern envelope format.
+fn make_codex_session(root: &std::path::Path, date_path: &str, filename: &str, content: &str) {
+    let sessions = root.join(format!("sessions/{date_path}"));
+    fs::create_dir_all(&sessions).unwrap();
+    let file = sessions.join(filename);
+    // Modern Codex JSONL envelope format
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let sample = format!(
+        r#"{{"type": "event_msg", "timestamp": {ts}, "payload": {{"type": "user_message", "message": "{content}"}}}}
+{{"type": "response_item", "timestamp": {}, "payload": {{"role": "assistant", "content": "{content}_response"}}}}"#,
+        ts + 1000
+    );
+    fs::write(file, sample).unwrap();
+}
+
+/// Test incremental indexing: creates sessions, indexes, adds more, re-indexes,
+/// and verifies only new sessions are processed while all remain searchable.
+#[test]
+fn incremental_index_only_processes_new_sessions() {
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    // Phase 1: Create initial 5 sessions
+    make_codex_session(
+        &codex_home,
+        "2025/11/20",
+        "rollout-1.jsonl",
+        "alpha_content",
+    );
+    make_codex_session(&codex_home, "2025/11/20", "rollout-2.jsonl", "beta_content");
+    make_codex_session(
+        &codex_home,
+        "2025/11/21",
+        "rollout-1.jsonl",
+        "gamma_content",
+    );
+    make_codex_session(
+        &codex_home,
+        "2025/11/21",
+        "rollout-2.jsonl",
+        "delta_content",
+    );
+    make_codex_session(
+        &codex_home,
+        "2025/11/22",
+        "rollout-1.jsonl",
+        "epsilon_content",
+    );
+
+    // Full index
+    let mut cmd1 = base_cmd(home);
+    cmd1.env("CODEX_HOME", &codex_home);
+    cmd1.args([
+        "index",
+        "--full",
+        "--data-dir",
+        data_dir.to_str().unwrap(),
+        "--json",
+    ]);
+    cmd1.assert().success();
+
+    // Verify all 5 sessions indexed - search for unique content
+    for term in [
+        "alpha_content",
+        "beta_content",
+        "gamma_content",
+        "delta_content",
+        "epsilon_content",
+    ] {
+        let mut search = base_cmd(home);
+        search.env("CODEX_HOME", &codex_home);
+        search.args([
+            "search",
+            term,
+            "--robot",
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+        ]);
+        let output = search.output().expect("search command");
+        assert!(output.status.success(), "search should succeed");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        let hits = json
+            .get("hits")
+            .and_then(|h| h.as_array())
+            .expect("hits array");
+        assert!(
+            !hits.is_empty(),
+            "Should find hit for {term} after initial index"
+        );
+    }
+
+    // Phase 2: Wait to ensure mtime difference, then add 2 new sessions
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    make_codex_session(&codex_home, "2025/11/23", "rollout-1.jsonl", "zeta_content");
+    make_codex_session(&codex_home, "2025/11/23", "rollout-2.jsonl", "eta_content");
+
+    // Incremental index (no --full flag)
+    let mut cmd2 = base_cmd(home);
+    cmd2.env("CODEX_HOME", &codex_home);
+    cmd2.args(["index", "--data-dir", data_dir.to_str().unwrap(), "--json"]);
+    cmd2.assert().success();
+
+    // Verify all 7 sessions are now searchable
+    for term in [
+        "alpha_content",
+        "beta_content",
+        "gamma_content",
+        "delta_content",
+        "epsilon_content",
+        "zeta_content",
+        "eta_content",
+    ] {
+        let mut search = base_cmd(home);
+        search.env("CODEX_HOME", &codex_home);
+        search.args([
+            "search",
+            term,
+            "--robot",
+            "--data-dir",
+            data_dir.to_str().unwrap(),
+        ]);
+        let output = search.output().expect("search command");
+        assert!(output.status.success(), "search should succeed");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+        let hits = json
+            .get("hits")
+            .and_then(|h| h.as_array())
+            .expect("hits array");
+        assert!(
+            !hits.is_empty(),
+            "Should find hit for {term} after incremental index"
+        );
+    }
+
+    // Verify the new sessions specifically
+    let mut search_zeta = base_cmd(home);
+    search_zeta.env("CODEX_HOME", &codex_home);
+    search_zeta.args([
+        "search",
+        "zeta_content",
+        "--robot",
+        "--data-dir",
+        data_dir.to_str().unwrap(),
+    ]);
+    let output = search_zeta.output().expect("search command");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let hits = json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+    assert_eq!(
+        hits.len(),
+        1,
+        "Should find exactly one hit for zeta_content"
+    );
+    assert_eq!(
+        hits[0]["agent"], "codex",
+        "Hit should be from codex connector"
+    );
+}

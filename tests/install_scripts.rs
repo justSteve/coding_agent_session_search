@@ -7,6 +7,7 @@ fn fixture(path: &str) -> PathBuf {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 fn install_sh_succeeds_with_valid_checksum() {
     let tar = fixture("tests/fixtures/install/coding-agent-search-vtest-linux-x86_64.tar.gz");
     let checksum = fs::read_to_string(
@@ -38,6 +39,7 @@ fn install_sh_succeeds_with_valid_checksum() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 fn install_sh_fails_with_bad_checksum() {
     let tar = fixture("tests/fixtures/install/coding-agent-search-vtest-linux-x86_64.tar.gz");
     let dest = tempfile::TempDir::new().unwrap();

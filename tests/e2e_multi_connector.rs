@@ -68,6 +68,10 @@ fn make_amp_fixture(root: &Path) {
 }
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "Linux-specific test (XDG_DATA_HOME paths)"
+)]
 fn multi_connector_pipeline() {
     let tmp = tempfile::TempDir::new().unwrap();
     let home = tmp.path();

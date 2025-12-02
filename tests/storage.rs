@@ -272,3 +272,469 @@ fn unsupported_schema_version_errors() {
         "opening with unsupported schema_version should error"
     );
 }
+
+// =============================================================================
+// Schema Migration Tests (tst.sto.schema)
+// Tests for database schema creation and migrations
+// =============================================================================
+
+#[test]
+fn fresh_db_creates_all_tables() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("fresh.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    // Query sqlite_master for table names
+    let tables: Vec<String> = storage
+        .raw()
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(tables.contains(&"meta".to_string()), "meta table exists");
+    assert!(
+        tables.contains(&"agents".to_string()),
+        "agents table exists"
+    );
+    assert!(
+        tables.contains(&"workspaces".to_string()),
+        "workspaces table exists"
+    );
+    assert!(
+        tables.contains(&"conversations".to_string()),
+        "conversations table exists"
+    );
+    assert!(
+        tables.contains(&"messages".to_string()),
+        "messages table exists"
+    );
+    assert!(
+        tables.contains(&"snippets".to_string()),
+        "snippets table exists"
+    );
+    assert!(tables.contains(&"tags".to_string()), "tags table exists");
+    assert!(
+        tables.contains(&"conversation_tags".to_string()),
+        "conversation_tags table exists"
+    );
+    // FTS5 virtual table
+    assert!(
+        tables.contains(&"fts_messages".to_string()),
+        "fts_messages virtual table exists"
+    );
+}
+
+#[test]
+fn fresh_db_creates_all_indexes() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("indexes.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    let indexes: Vec<String> = storage
+        .raw()
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(
+        indexes.contains(&"idx_conversations_agent_started".to_string()),
+        "idx_conversations_agent_started index exists"
+    );
+    assert!(
+        indexes.contains(&"idx_messages_conv_idx".to_string()),
+        "idx_messages_conv_idx index exists"
+    );
+    assert!(
+        indexes.contains(&"idx_messages_created".to_string()),
+        "idx_messages_created index exists"
+    );
+}
+
+#[test]
+fn agents_table_has_correct_columns() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("agents_cols.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    let columns: Vec<String> = storage
+        .raw()
+        .prepare("PRAGMA table_info(agents)")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(columns.contains(&"id".to_string()));
+    assert!(columns.contains(&"slug".to_string()));
+    assert!(columns.contains(&"name".to_string()));
+    assert!(columns.contains(&"version".to_string()));
+    assert!(columns.contains(&"kind".to_string()));
+    assert!(columns.contains(&"created_at".to_string()));
+    assert!(columns.contains(&"updated_at".to_string()));
+}
+
+#[test]
+fn conversations_table_has_correct_columns() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("convs_cols.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    let columns: Vec<String> = storage
+        .raw()
+        .prepare("PRAGMA table_info(conversations)")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(columns.contains(&"id".to_string()));
+    assert!(columns.contains(&"agent_id".to_string()));
+    assert!(columns.contains(&"workspace_id".to_string()));
+    assert!(columns.contains(&"external_id".to_string()));
+    assert!(columns.contains(&"title".to_string()));
+    assert!(columns.contains(&"source_path".to_string()));
+    assert!(columns.contains(&"started_at".to_string()));
+    assert!(columns.contains(&"ended_at".to_string()));
+    assert!(columns.contains(&"approx_tokens".to_string()));
+    assert!(columns.contains(&"metadata_json".to_string()));
+}
+
+#[test]
+fn messages_table_has_correct_columns() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("msgs_cols.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    let columns: Vec<String> = storage
+        .raw()
+        .prepare("PRAGMA table_info(messages)")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert!(columns.contains(&"id".to_string()));
+    assert!(columns.contains(&"conversation_id".to_string()));
+    assert!(columns.contains(&"idx".to_string()));
+    assert!(columns.contains(&"role".to_string()));
+    assert!(columns.contains(&"author".to_string()));
+    assert!(columns.contains(&"created_at".to_string()));
+    assert!(columns.contains(&"content".to_string()));
+    assert!(columns.contains(&"extra_json".to_string()));
+}
+
+#[test]
+fn fts_messages_is_fts5_virtual_table() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("fts5.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    // Check that fts_messages is an FTS5 virtual table
+    let sql: String = storage
+        .raw()
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='fts_messages' AND type='table'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("fts_messages should exist");
+
+    assert!(
+        sql.contains("fts5"),
+        "fts_messages should be FTS5 virtual table"
+    );
+    assert!(sql.contains("content"), "fts_messages should have content");
+    assert!(sql.contains("title"), "fts_messages should have title");
+    assert!(sql.contains("agent"), "fts_messages should have agent");
+    assert!(
+        sql.contains("workspace"),
+        "fts_messages should have workspace"
+    );
+    assert!(
+        sql.contains("porter"),
+        "fts_messages should use porter tokenizer"
+    );
+}
+
+#[test]
+fn migration_from_v1_applies_v2_and_v3() {
+    use rusqlite::Connection;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("migrate_v1.db");
+
+    // Manually create a v1 database
+    {
+        let conn = Connection::open(&db_path).expect("create v1 db");
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta(key, value) VALUES('schema_version', '1');
+
+            CREATE TABLE agents (
+                id INTEGER PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                version TEXT,
+                kind TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                display_name TEXT
+            );
+
+            CREATE TABLE conversations (
+                id INTEGER PRIMARY KEY,
+                agent_id INTEGER NOT NULL REFERENCES agents(id),
+                workspace_id INTEGER REFERENCES workspaces(id),
+                external_id TEXT,
+                title TEXT,
+                source_path TEXT NOT NULL,
+                started_at INTEGER,
+                ended_at INTEGER,
+                approx_tokens INTEGER,
+                metadata_json TEXT,
+                UNIQUE(agent_id, external_id)
+            );
+
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                idx INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                author TEXT,
+                created_at INTEGER,
+                content TEXT NOT NULL,
+                extra_json TEXT,
+                UNIQUE(conversation_id, idx)
+            );
+
+            CREATE TABLE snippets (
+                id INTEGER PRIMARY KEY,
+                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                file_path TEXT,
+                start_line INTEGER,
+                end_line INTEGER,
+                language TEXT,
+                snippet_text TEXT
+            );
+
+            CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+
+            CREATE TABLE conversation_tags (
+                conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (conversation_id, tag_id)
+            );
+
+            CREATE INDEX idx_conversations_agent_started ON conversations(agent_id, started_at DESC);
+            CREATE INDEX idx_messages_conv_idx ON messages(conversation_id, idx);
+            CREATE INDEX idx_messages_created ON messages(created_at);
+            "#,
+        )
+        .expect("create v1 schema");
+    }
+
+    // Open with SqliteStorage - should apply v2 and v3 migrations
+    let storage = SqliteStorage::open(&db_path).expect("open v1 db");
+
+    // Verify migration completed
+    assert_eq!(storage.schema_version().unwrap(), 3, "should migrate to v3");
+
+    // Verify FTS5 table was created
+    let tables: Vec<String> = storage
+        .raw()
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='fts_messages'")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    assert_eq!(tables.len(), 1, "fts_messages should exist after migration");
+}
+
+#[test]
+fn migration_from_v2_applies_v3() {
+    use rusqlite::Connection;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("migrate_v2.db");
+
+    // Manually create a v2 database with FTS5 table
+    {
+        let conn = Connection::open(&db_path).expect("create v2 db");
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta(key, value) VALUES('schema_version', '2');
+
+            CREATE TABLE agents (
+                id INTEGER PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                version TEXT,
+                kind TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE workspaces (
+                id INTEGER PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                display_name TEXT
+            );
+
+            CREATE TABLE conversations (
+                id INTEGER PRIMARY KEY,
+                agent_id INTEGER NOT NULL REFERENCES agents(id),
+                workspace_id INTEGER REFERENCES workspaces(id),
+                external_id TEXT,
+                title TEXT,
+                source_path TEXT NOT NULL,
+                started_at INTEGER,
+                ended_at INTEGER,
+                approx_tokens INTEGER,
+                metadata_json TEXT,
+                UNIQUE(agent_id, external_id)
+            );
+
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY,
+                conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                idx INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                author TEXT,
+                created_at INTEGER,
+                content TEXT NOT NULL,
+                extra_json TEXT,
+                UNIQUE(conversation_id, idx)
+            );
+
+            CREATE TABLE snippets (
+                id INTEGER PRIMARY KEY,
+                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                file_path TEXT,
+                start_line INTEGER,
+                end_line INTEGER,
+                language TEXT,
+                snippet_text TEXT
+            );
+
+            CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+
+            CREATE TABLE conversation_tags (
+                conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                PRIMARY KEY (conversation_id, tag_id)
+            );
+
+            CREATE INDEX idx_conversations_agent_started ON conversations(agent_id, started_at DESC);
+            CREATE INDEX idx_messages_conv_idx ON messages(conversation_id, idx);
+            CREATE INDEX idx_messages_created ON messages(created_at);
+
+            -- V2 FTS5 table
+            CREATE VIRTUAL TABLE fts_messages USING fts5(
+                content,
+                title,
+                agent,
+                workspace,
+                source_path,
+                created_at UNINDEXED,
+                message_id UNINDEXED,
+                tokenize='porter'
+            );
+            "#,
+        )
+        .expect("create v2 schema");
+    }
+
+    // Open with SqliteStorage - should apply v3 migration
+    let storage = SqliteStorage::open(&db_path).expect("open v2 db");
+
+    // Verify migration completed
+    assert_eq!(storage.schema_version().unwrap(), 3, "should migrate to v3");
+}
+
+#[test]
+fn foreign_keys_are_enforced() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("fk.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    // Try to insert a conversation with non-existent agent_id
+    let result = storage.raw().execute(
+        "INSERT INTO conversations(agent_id, source_path) VALUES(999, '/test')",
+        [],
+    );
+
+    assert!(
+        result.is_err(),
+        "foreign key constraint should prevent invalid agent_id"
+    );
+}
+
+#[test]
+fn unique_constraints_work() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("unique.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    // Insert an agent
+    storage
+        .raw()
+        .execute(
+            "INSERT INTO agents(slug, name, kind, created_at, updated_at) VALUES('test', 'Test', 'cli', 0, 0)",
+            [],
+        )
+        .expect("first insert");
+
+    // Try to insert duplicate slug
+    let result = storage.raw().execute(
+        "INSERT INTO agents(slug, name, kind, created_at, updated_at) VALUES('test', 'Test2', 'cli', 0, 0)",
+        [],
+    );
+
+    assert!(
+        result.is_err(),
+        "unique constraint should prevent duplicate slug"
+    );
+}
+
+#[test]
+fn pragmas_are_applied() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db_path = tmp.path().join("pragmas.db");
+    let storage = SqliteStorage::open(&db_path).expect("open");
+
+    // Check journal_mode is WAL
+    let journal_mode: String = storage
+        .raw()
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(journal_mode, "wal", "journal_mode should be WAL");
+
+    // Check foreign_keys is ON
+    let fk: i64 = storage
+        .raw()
+        .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fk, 1, "foreign_keys should be ON");
+}

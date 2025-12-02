@@ -94,6 +94,17 @@
           ]
         },
         {
+          "name": "reset-state",
+          "description": "Delete persisted UI state (tui_state.json) before launch",
+          "arg_type": "flag",
+          "required": false,
+          "default": "false",
+          "enum_values": [
+            "true",
+            "false"
+          ]
+        },
+        {
           "name": "data-dir",
           "description": "Override data dir (matches index --data-dir)",
           "arg_type": "option",
@@ -704,7 +715,347 @@
       },
       "type": "object"
     },
-    "state": {
+    "introspect": {
+      "properties": {
+        "api_version": {
+          "type": "integer"
+        },
+        "commands": {
+          "items": {
+            "properties": {
+              "arguments": {
+                "items": {
+                  "properties": {
+                    "arg_type": {
+                      "type": "string"
+                    },
+                    "default": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "enum_values": {
+                      "type": [
+                        "array",
+                        "null"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "repeatable": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "short": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "value_type": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "description": {
+                "type": "string"
+              },
+              "has_json_output": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "contract_version": {
+          "type": "string"
+        },
+        "global_flags": {
+          "items": {
+            "properties": {
+              "arg_type": {
+                "type": "string"
+              },
+              "default": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "type": "string"
+              },
+              "enum_values": {
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "repeatable": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "short": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "response_schemas": {
+          "additionalProperties": {
+            "type": "object"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "stats": {
+      "properties": {
+        "by_agent": {
+          "items": {
+            "properties": {
+              "agent": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "conversations": {
+          "type": "integer"
+        },
+        "date_range": {
+          "properties": {
+            "newest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "oldest": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "db_path": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "integer"
+        },
+        "top_workspaces": {
+          "items": {
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "workspace": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "index": {
+      "properties": {
+        "conversations": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "data_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "db_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elapsed_ms": {
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "force_rebuild": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "full": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "messages": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "api-version": {
+      "properties": {
+        "api_version": {
+          "type": "integer"
+        },
+        "contract_version": {
+          "type": "string"
+        },
+        "crate_version": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "view": {
+      "properties": {
+        "end_line": {
+          "type": "integer"
+        },
+        "highlight_line": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lines": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "highlighted": {
+                "type": "boolean"
+              },
+              "number": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "capabilities": {
+      "properties": {
+        "api_version": {
+          "type": "integer"
+        },
+        "connectors": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "contract_version": {
+          "type": "string"
+        },
+        "crate_version": {
+          "type": "string"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "properties": {
+            "max_agg_buckets": {
+              "type": "integer"
+            },
+            "max_content_length": {
+              "type": "integer"
+            },
+            "max_fields": {
+              "type": "integer"
+            },
+            "max_limit": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "status": {
       "properties": {
         "_meta": {
           "properties": {
@@ -792,60 +1143,7 @@
       },
       "type": "object"
     },
-    "index": {
-      "properties": {
-        "conversations": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "data_dir": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "db_path": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "elapsed_ms": {
-          "type": "integer"
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "force_rebuild": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "full": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "messages": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "success": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "status": {
+    "state": {
       "properties": {
         "_meta": {
           "properties": {
@@ -1147,293 +1445,6 @@
         },
         "total_matches": {
           "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "api-version": {
-      "properties": {
-        "api_version": {
-          "type": "integer"
-        },
-        "contract_version": {
-          "type": "string"
-        },
-        "crate_version": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "capabilities": {
-      "properties": {
-        "api_version": {
-          "type": "integer"
-        },
-        "connectors": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "contract_version": {
-          "type": "string"
-        },
-        "crate_version": {
-          "type": "string"
-        },
-        "features": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "limits": {
-          "properties": {
-            "max_agg_buckets": {
-              "type": "integer"
-            },
-            "max_content_length": {
-              "type": "integer"
-            },
-            "max_fields": {
-              "type": "integer"
-            },
-            "max_limit": {
-              "type": "integer"
-            }
-          },
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "view": {
-      "properties": {
-        "end_line": {
-          "type": "integer"
-        },
-        "highlight_line": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "lines": {
-          "items": {
-            "properties": {
-              "content": {
-                "type": "string"
-              },
-              "highlighted": {
-                "type": "boolean"
-              },
-              "number": {
-                "type": "integer"
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "path": {
-          "type": "string"
-        },
-        "start_line": {
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
-    "stats": {
-      "properties": {
-        "by_agent": {
-          "items": {
-            "properties": {
-              "agent": {
-                "type": "string"
-              },
-              "count": {
-                "type": "integer"
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "conversations": {
-          "type": "integer"
-        },
-        "date_range": {
-          "properties": {
-            "newest": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "oldest": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "db_path": {
-          "type": "string"
-        },
-        "messages": {
-          "type": "integer"
-        },
-        "top_workspaces": {
-          "items": {
-            "properties": {
-              "count": {
-                "type": "integer"
-              },
-              "workspace": {
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "introspect": {
-      "properties": {
-        "api_version": {
-          "type": "integer"
-        },
-        "commands": {
-          "items": {
-            "properties": {
-              "arguments": {
-                "items": {
-                  "properties": {
-                    "arg_type": {
-                      "type": "string"
-                    },
-                    "default": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "description": {
-                      "type": "string"
-                    },
-                    "enum_values": {
-                      "type": [
-                        "array",
-                        "null"
-                      ]
-                    },
-                    "name": {
-                      "type": "string"
-                    },
-                    "repeatable": {
-                      "type": [
-                        "boolean",
-                        "null"
-                      ]
-                    },
-                    "required": {
-                      "type": "boolean"
-                    },
-                    "short": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "value_type": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    }
-                  },
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              "description": {
-                "type": "string"
-              },
-              "has_json_output": {
-                "type": "boolean"
-              },
-              "name": {
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "contract_version": {
-          "type": "string"
-        },
-        "global_flags": {
-          "items": {
-            "properties": {
-              "arg_type": {
-                "type": "string"
-              },
-              "default": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "description": {
-                "type": "string"
-              },
-              "enum_values": {
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "name": {
-                "type": "string"
-              },
-              "repeatable": {
-                "type": [
-                  "boolean",
-                  "null"
-                ]
-              },
-              "required": {
-                "type": "boolean"
-              },
-              "short": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "value_type": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "type": "object"
-          },
-          "type": "array"
-        },
-        "response_schemas": {
-          "additionalProperties": {
-            "type": "object"
-          },
-          "type": "object"
         }
       },
       "type": "object"

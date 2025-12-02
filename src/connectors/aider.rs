@@ -21,7 +21,8 @@ impl AiderConnector {
 
         for line in content.lines() {
             if line.trim().starts_with("> ") {
-                if !current_content.trim().is_empty() {
+                // Only push previous content if switching from non-user role
+                if current_role != "user" && !current_content.trim().is_empty() {
                     messages.push(NormalizedMessage {
                         idx: msg_idx,
                         role: current_role.to_string(),

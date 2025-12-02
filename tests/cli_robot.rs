@@ -27,6 +27,33 @@ fn robot_help_prints_contract() {
 }
 
 #[test]
+fn robot_help_has_sections_and_no_ansi() {
+    let mut cmd = base_cmd();
+    cmd.args(["--color=never", "--robot-help"]);
+    let output = cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "robot-help should not emit ANSI when color=never"
+    );
+    for needle in &[
+        "Summary:",
+        "Commands:",
+        "Defaults:",
+        "Exit codes:",
+        "Examples:",
+        "Env:",
+        "Paths:",
+        "Contracts:",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "robot-help output missing section {needle}"
+        );
+    }
+}
+
+#[test]
 fn api_version_reports_contract() {
     let mut cmd = base_cmd();
     cmd.args(["api-version", "--json"]);
@@ -189,6 +216,30 @@ fn robot_docs_schemas_topic() {
         .success()
         .stdout(contains("schemas:"))
         .stdout(contains("search"));
+}
+
+#[test]
+fn robot_docs_commands_includes_tui_reset_and_no_ansi() {
+    let mut cmd = base_cmd();
+    cmd.args(["--color=never", "robot-docs", "commands"]);
+    let out = cmd.assert().success().get_output().clone();
+    assert!(
+        out.stderr.is_empty(),
+        "robot-docs commands should not log to stderr"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "robot-docs commands should not emit ANSI when color=never"
+    );
+    assert!(
+        stdout.contains("cass tui [--once] [--data-dir DIR] [--reset-state]"),
+        "commands topic should list tui reset-state flag"
+    );
+    assert!(
+        stdout.contains("cass robot-docs <topic>"),
+        "commands topic should list robot-docs command"
+    );
 }
 
 fn read_fixture(name: &str) -> Value {

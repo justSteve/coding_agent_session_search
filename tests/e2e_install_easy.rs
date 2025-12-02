@@ -7,6 +7,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore)]
 fn install_easy_mode_end_to_end() {
     let tar = fixture("tests/fixtures/install/coding-agent-search-vtest-linux-x86_64.tar.gz");
     let checksum = fs::read_to_string(

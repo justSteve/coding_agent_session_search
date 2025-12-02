@@ -1,4 +1,3 @@
-use coding_agent_search::connectors::{NormalizedConversation, NormalizedMessage};
 use coding_agent_search::search::query::{SearchClient, SearchFilters};
 use coding_agent_search::search::tantivy::TantivyIndex;
 use tempfile::TempDir;
@@ -11,25 +10,14 @@ fn search_client_caches_repeated_queries() {
     let mut index = TantivyIndex::open_or_create(dir.path()).unwrap();
 
     // Seed index
-    let conv = NormalizedConversation {
-        agent_slug: "tester".into(),
-        external_id: None,
-        title: Some("cache test".into()),
-        workspace: Some(std::path::PathBuf::from("/tmp")),
-        source_path: dir.path().join("log.jsonl"),
-        started_at: Some(1000),
-        ended_at: None,
-        metadata: serde_json::json!({}),
-        messages: vec![NormalizedMessage {
-            idx: 0,
-            role: "user".into(),
-            author: None,
-            created_at: Some(1000),
-            content: "unique_term_for_cache_test".into(),
-            extra: serde_json::json!({}),
-            snippets: vec![],
-        }],
-    };
+    let conv = util::ConversationFixtureBuilder::new("tester")
+        .title("cache test")
+        .source_path(dir.path().join("log.jsonl"))
+        .base_ts(1000)
+        .messages(1)
+        .with_content(0, "unique_term_for_cache_test")
+        .build_normalized();
+
     index.add_conversation(&conv).unwrap();
     index.commit().unwrap();
 
@@ -67,25 +55,14 @@ fn search_client_prefix_cache_works() {
     let dir = TempDir::new().unwrap();
     let mut index = TantivyIndex::open_or_create(dir.path()).unwrap();
 
-    let conv = NormalizedConversation {
-        agent_slug: "tester".into(),
-        external_id: None,
-        title: Some("prefix test".into()),
-        workspace: Some(std::path::PathBuf::from("/tmp")),
-        source_path: dir.path().join("log.jsonl"),
-        started_at: Some(1000),
-        ended_at: None,
-        metadata: serde_json::json!({}),
-        messages: vec![NormalizedMessage {
-            idx: 0,
-            role: "user".into(),
-            author: None,
-            created_at: Some(1000),
-            content: "apple banana cherry".into(),
-            extra: serde_json::json!({}),
-            snippets: vec![],
-        }],
-    };
+    let conv = util::ConversationFixtureBuilder::new("tester")
+        .title("prefix test")
+        .source_path(dir.path().join("log.jsonl"))
+        .base_ts(1000)
+        .messages(1)
+        .with_content(0, "apple banana cherry")
+        .build_normalized();
+
     index.add_conversation(&conv).unwrap();
     index.commit().unwrap();
 

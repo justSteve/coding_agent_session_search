@@ -329,6 +329,8 @@ The project ships with a robust installer (`install.sh` / `install.ps1`) designe
 
 - **Watch mode not triggering**: Confirm `watch_state.json` updates and that connector roots are accessible; `notify` relies on OS file events (inotify/FSEvents).
 
+- **Reset TUI state**: Run `cass tui --reset-state` (or press `Ctrl+Shift+Del` in the TUI) to delete `tui_state.json` and restore defaults.
+
 
 
 ## 🧪 Developer Workflow

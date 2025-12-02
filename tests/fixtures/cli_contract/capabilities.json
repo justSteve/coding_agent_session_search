@@ -23,7 +23,8 @@
     "gemini",
     "opencode",
     "amp",
-    "cline"
+    "cline",
+    "aider"
   ],
   "limits": {
     "max_limit": 10000,

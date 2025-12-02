@@ -96,6 +96,10 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         once: bool,
 
+        /// Delete persisted UI state (tui_state.json) before launch
+        #[arg(long, default_value_t = false)]
+        reset_state: bool,
+
         /// Override data dir (matches index --data-dir)
         #[arg(long)]
         data_dir: Option<PathBuf>,
@@ -526,6 +530,7 @@ async fn execute_cli(
 ) -> CliResult<()> {
     let command = cli.command.clone().unwrap_or(Commands::Tui {
         once: false,
+        reset_state: false,
         data_dir: None,
     });
 
@@ -602,24 +607,36 @@ async fn execute_cli(
                 let progress = std::sync::Arc::new(indexer::IndexingProgress::default());
                 spawn_background_indexer(bg_data_dir, bg_db, Some(progress.clone()));
 
-                if let Commands::Tui { once, data_dir } = command {
-                    ui::tui::run_tui(data_dir.clone(), once, Some(progress)).map_err(|e| {
-                        CliError {
+                if let Commands::Tui {
+                    once,
+                    data_dir,
+                    reset_state,
+                } = command
+                {
+                    ui::tui::run_tui(data_dir.clone(), once, reset_state, Some(progress)).map_err(
+                        |e| CliError {
                             code: 9,
                             kind: "tui",
                             message: format!("tui failed: {e}"),
                             hint: None,
                             retryable: false,
-                        }
-                    })?;
+                        },
+                    )?;
                 }
-            } else if let Commands::Tui { once, data_dir } = command {
-                ui::tui::run_tui(data_dir.clone(), once, None).map_err(|e| CliError {
-                    code: 9,
-                    kind: "tui",
-                    message: format!("tui failed: {e}"),
-                    hint: None,
-                    retryable: false,
+            } else if let Commands::Tui {
+                once,
+                data_dir,
+                reset_state,
+            } = command
+            {
+                ui::tui::run_tui(data_dir.clone(), once, reset_state, None).map_err(|e| {
+                    CliError {
+                        code: 9,
+                        kind: "tui",
+                        message: format!("tui failed: {e}"),
+                        hint: None,
+                        retryable: false,
+                    }
                 })?;
             }
         }
@@ -2802,6 +2819,7 @@ fn run_capabilities(json: bool) -> CliResult<()> {
             "opencode".to_string(),
             "amp".to_string(),
             "cline".to_string(),
+            "aider".to_string(),
         ],
         limits: CapabilitiesLimits {
             max_limit: 10000,
