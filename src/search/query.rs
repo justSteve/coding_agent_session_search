@@ -29,6 +29,384 @@ pub struct SearchFilters {
     pub created_to: Option<i64>,
 }
 
+// ============================================================================
+// Query Explanation types (--explain flag support)
+// ============================================================================
+
+/// Classification of query type for explanation purposes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryType {
+    /// Single term without operators
+    Simple,
+    /// Quoted phrase ("exact match")
+    Phrase,
+    /// Contains AND/OR/NOT operators
+    Boolean,
+    /// Contains wildcards (* prefix/suffix)
+    Wildcard,
+    /// Has time/agent/workspace filters
+    Filtered,
+    /// Empty query
+    Empty,
+}
+
+/// How the index will execute this query
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexStrategy {
+    /// Fast path: edge n-gram prefix matching
+    EdgeNgram,
+    /// Regex scan for leading wildcards (*foo)
+    RegexScan,
+    /// Combined boolean query execution
+    BooleanCombination,
+    /// Range scan for time filters
+    RangeScan,
+    /// All documents (empty query)
+    FullScan,
+}
+
+/// Rough complexity indicator for query execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryCost {
+    /// Very fast (<10ms typical)
+    Low,
+    /// Moderate (10-100ms typical)
+    Medium,
+    /// Expensive (100ms+ typical, may scan many documents)
+    High,
+}
+
+/// Parsed term from the query
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ParsedTerm {
+    /// Original term text
+    pub text: String,
+    /// Wildcard pattern applied
+    pub pattern: String,
+    /// Whether this is negated (NOT/-)
+    pub negated: bool,
+}
+
+/// Parsed structure of the query
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ParsedQuery {
+    /// Individual terms extracted
+    pub terms: Vec<ParsedTerm>,
+    /// Phrases (quoted strings)
+    pub phrases: Vec<String>,
+    /// Boolean operators used
+    pub operators: Vec<String>,
+    /// Whether implicit AND is used between terms
+    pub implicit_and: bool,
+}
+
+/// Comprehensive query explanation for debugging and understanding search behavior
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueryExplanation {
+    /// Exact input string
+    pub original_query: String,
+    /// Sanitized query after normalization
+    pub sanitized_query: String,
+    /// Structured breakdown of query components
+    pub parsed: ParsedQuery,
+    /// High-level classification
+    pub query_type: QueryType,
+    /// How the index will execute this query
+    pub index_strategy: IndexStrategy,
+    /// Whether wildcard fallback was/will be applied
+    pub wildcard_applied: bool,
+    /// Rough complexity indicator
+    pub estimated_cost: QueryCost,
+    /// Active filters summary
+    pub filters_summary: FiltersSummary,
+    /// Any issues or suggestions
+    pub warnings: Vec<String>,
+}
+
+/// Summary of active filters for explanation
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct FiltersSummary {
+    /// Number of agent filters
+    pub agent_count: usize,
+    /// Number of workspace filters
+    pub workspace_count: usize,
+    /// Whether time range is applied
+    pub has_time_filter: bool,
+    /// Human-readable filter description
+    pub description: Option<String>,
+}
+
+impl QueryExplanation {
+    /// Build explanation from query string and filters
+    pub fn analyze(query: &str, filters: &SearchFilters) -> Self {
+        let sanitized = sanitize_query(query);
+        let tokens = parse_boolean_query(&sanitized);
+
+        // Extract terms, phrases, and operators
+        let mut parsed = ParsedQuery::default();
+        let mut has_explicit_operator = false;
+        let mut next_negated = false;
+
+        for token in &tokens {
+            match token {
+                QueryToken::Term(t) => {
+                    let pattern = WildcardPattern::parse(t);
+                    let pattern_str = match &pattern {
+                        WildcardPattern::Exact(_) => "exact",
+                        WildcardPattern::Prefix(_) => "prefix (*)",
+                        WildcardPattern::Suffix(_) => "suffix (*)",
+                        WildcardPattern::Substring(_) => "substring (*)",
+                    };
+                    parsed.terms.push(ParsedTerm {
+                        text: t.clone(),
+                        pattern: pattern_str.to_string(),
+                        negated: next_negated,
+                    });
+                    next_negated = false;
+                }
+                QueryToken::Phrase(p) => {
+                    parsed.phrases.push(p.clone());
+                    next_negated = false;
+                }
+                QueryToken::And => {
+                    parsed.operators.push("AND".to_string());
+                    has_explicit_operator = true;
+                }
+                QueryToken::Or => {
+                    parsed.operators.push("OR".to_string());
+                    has_explicit_operator = true;
+                }
+                QueryToken::Not => {
+                    parsed.operators.push("NOT".to_string());
+                    has_explicit_operator = true;
+                    next_negated = true;
+                }
+            }
+        }
+
+        // Implicit AND between terms if no explicit operators
+        parsed.implicit_and = !has_explicit_operator && parsed.terms.len() > 1;
+
+        // Determine query type
+        let query_type = Self::classify_query(&parsed, filters, &sanitized);
+
+        // Determine index strategy
+        let index_strategy = Self::determine_strategy(&parsed, &sanitized);
+
+        // Estimate cost
+        let estimated_cost = Self::estimate_cost(&parsed, &index_strategy, filters);
+
+        // Build filters summary
+        let filters_summary = Self::summarize_filters(filters);
+
+        // Generate warnings
+        let warnings = Self::generate_warnings(&parsed, &sanitized, filters);
+
+        Self {
+            original_query: query.to_string(),
+            sanitized_query: sanitized,
+            parsed,
+            query_type,
+            index_strategy,
+            wildcard_applied: false, // Set later by search_with_fallback
+            estimated_cost,
+            filters_summary,
+            warnings,
+        }
+    }
+
+    fn classify_query(parsed: &ParsedQuery, filters: &SearchFilters, sanitized: &str) -> QueryType {
+        if sanitized.trim().is_empty() {
+            return QueryType::Empty;
+        }
+
+        // Check for filters first (they modify everything)
+        let has_filters = !filters.agents.is_empty()
+            || !filters.workspaces.is_empty()
+            || filters.created_from.is_some()
+            || filters.created_to.is_some();
+
+        if has_filters {
+            return QueryType::Filtered;
+        }
+
+        // Check for boolean operators
+        if !parsed.operators.is_empty() {
+            return QueryType::Boolean;
+        }
+
+        // Check for phrases
+        if !parsed.phrases.is_empty() {
+            return QueryType::Phrase;
+        }
+
+        // Check for wildcards
+        let has_wildcards = parsed.terms.iter().any(|t| t.pattern != "exact");
+        if has_wildcards {
+            return QueryType::Wildcard;
+        }
+
+        QueryType::Simple
+    }
+
+    fn determine_strategy(parsed: &ParsedQuery, sanitized: &str) -> IndexStrategy {
+        if sanitized.trim().is_empty() {
+            return IndexStrategy::FullScan;
+        }
+
+        // Check for leading wildcards (requires regex)
+        let has_leading_wildcard = parsed
+            .terms
+            .iter()
+            .any(|t| t.pattern == "suffix (*)" || t.pattern == "substring (*)");
+
+        if has_leading_wildcard {
+            return IndexStrategy::RegexScan;
+        }
+
+        // Boolean queries use combination strategy
+        if !parsed.operators.is_empty() || parsed.terms.len() > 1 || !parsed.phrases.is_empty() {
+            return IndexStrategy::BooleanCombination;
+        }
+
+        // Single term uses edge n-gram
+        IndexStrategy::EdgeNgram
+    }
+
+    fn estimate_cost(
+        parsed: &ParsedQuery,
+        strategy: &IndexStrategy,
+        filters: &SearchFilters,
+    ) -> QueryCost {
+        // Regex scans are always expensive
+        if matches!(strategy, IndexStrategy::RegexScan) {
+            return QueryCost::High;
+        }
+
+        // Full scans are expensive
+        if matches!(strategy, IndexStrategy::FullScan) {
+            return QueryCost::High;
+        }
+
+        // Time range filters add cost
+        let has_time_filter = filters.created_from.is_some() || filters.created_to.is_some();
+
+        // Count complexity factors
+        let term_count = parsed.terms.len();
+        let operator_count = parsed.operators.len();
+        let phrase_count = parsed.phrases.len();
+
+        let complexity = term_count + operator_count * 2 + phrase_count * 2;
+
+        if complexity > 6 || has_time_filter {
+            QueryCost::Medium
+        } else if complexity > 2 {
+            QueryCost::Medium
+        } else {
+            QueryCost::Low
+        }
+    }
+
+    fn summarize_filters(filters: &SearchFilters) -> FiltersSummary {
+        let agent_count = filters.agents.len();
+        let workspace_count = filters.workspaces.len();
+        let has_time_filter = filters.created_from.is_some() || filters.created_to.is_some();
+
+        let mut parts = Vec::new();
+        if agent_count > 0 {
+            parts.push(format!(
+                "{} agent{}",
+                agent_count,
+                if agent_count > 1 { "s" } else { "" }
+            ));
+        }
+        if workspace_count > 0 {
+            parts.push(format!(
+                "{} workspace{}",
+                workspace_count,
+                if workspace_count > 1 { "s" } else { "" }
+            ));
+        }
+        if has_time_filter {
+            parts.push("time range".to_string());
+        }
+
+        let description = if parts.is_empty() {
+            None
+        } else {
+            Some(format!("Filtering by: {}", parts.join(", ")))
+        };
+
+        FiltersSummary {
+            agent_count,
+            workspace_count,
+            has_time_filter,
+            description,
+        }
+    }
+
+    fn generate_warnings(parsed: &ParsedQuery, sanitized: &str, filters: &SearchFilters) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        // Warn about leading wildcards
+        let has_leading_wildcard = parsed
+            .terms
+            .iter()
+            .any(|t| t.pattern == "suffix (*)" || t.pattern == "substring (*)");
+        if has_leading_wildcard {
+            warnings.push(
+                "Leading wildcards (*foo) require regex scan and may be slow on large indexes"
+                    .to_string(),
+            );
+        }
+
+        // Warn about very short terms
+        for term in &parsed.terms {
+            if term.text.trim_matches('*').len() < 2 {
+                warnings.push(format!(
+                    "Very short term '{}' may match many documents",
+                    term.text
+                ));
+            }
+        }
+
+        // Warn about empty query
+        if sanitized.trim().is_empty() {
+            warnings.push("Empty query will return all documents (expensive)".to_string());
+        }
+
+        // Warn about complex boolean queries
+        if parsed.operators.len() > 3 {
+            warnings.push("Complex boolean query may have unexpected precedence".to_string());
+        }
+
+        // Warn about narrow filters that might miss results
+        if filters.agents.len() == 1 && filters.workspaces.is_empty() {
+            warnings.push(format!(
+                "Searching only in agent '{}' - results from other agents will be excluded",
+                filters.agents.iter().next().unwrap()
+            ));
+        }
+
+        warnings
+    }
+
+    /// Update wildcard_applied flag (called after search_with_fallback)
+    pub fn with_wildcard_fallback(mut self, applied: bool) -> Self {
+        self.wildcard_applied = applied;
+        if applied && !self.warnings.iter().any(|w| w.contains("wildcard fallback")) {
+            self.warnings.push(
+                "Wildcard fallback was applied automatically due to sparse exact matches"
+                    .to_string(),
+            );
+        }
+        self
+    }
+}
+
 /// Indicates how a search result matched the query.
 /// Used for ranking: exact matches rank higher than wildcard matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]

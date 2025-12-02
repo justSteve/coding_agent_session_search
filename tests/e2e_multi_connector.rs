@@ -630,36 +630,40 @@ fn multi_connector_aggregation() {
         .expect("search command");
 
     assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    eprintln!("DEBUG aggregation response: {}", stdout);
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
 
     // Check aggregations exist
     let aggregations = json.get("aggregations").and_then(|a| a.as_object());
     assert!(
         aggregations.is_some(),
-        "Should have aggregations in response. Full response: {}",
-        stdout
+        "Should have aggregations in response"
     );
 
     let aggs = aggregations.unwrap();
     let agent_agg = aggs.get("agent").and_then(|a| a.as_object());
-    assert!(
-        agent_agg.is_some(),
-        "Should have agent aggregation. Aggregations: {:?}",
-        aggs
-    );
+    assert!(agent_agg.is_some(), "Should have agent aggregation");
 
-    let agents = agent_agg.unwrap();
+    // Aggregations use buckets format: { "buckets": [{"key": "codex", "count": N}, ...] }
+    let buckets = agent_agg
+        .unwrap()
+        .get("buckets")
+        .and_then(|b| b.as_array())
+        .expect("Should have buckets array");
+
+    let agent_keys: std::collections::HashSet<_> = buckets
+        .iter()
+        .filter_map(|b| b.get("key").and_then(|k| k.as_str()))
+        .collect();
+
     assert!(
-        agents.contains_key("codex"),
-        "Agent aggregation should include codex. Agents: {:?}",
-        agents
+        agent_keys.contains("codex"),
+        "Agent aggregation should include codex. Keys: {:?}",
+        agent_keys
     );
     assert!(
-        agents.contains_key("claude_code"),
-        "Agent aggregation should include claude_code. Agents: {:?}",
-        agents
+        agent_keys.contains("claude_code"),
+        "Agent aggregation should include claude_code. Keys: {:?}",
+        agent_keys
     );
 }
 
