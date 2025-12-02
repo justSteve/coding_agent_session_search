@@ -257,3 +257,653 @@ fn multi_connector_pipeline() {
     }
     assert!(!hits_filter.is_empty());
 }
+
+// ============================================================================
+// Cross-platform multi-connector tests (work on macOS and Linux)
+// These tests use Codex and Claude Code which rely on HOME env var
+// ============================================================================
+
+/// Creates a Codex session with specific date and content.
+fn make_codex_session(
+    codex_home: &Path,
+    date_path: &str,
+    filename: &str,
+    content: &str,
+    ts_millis: u64,
+) {
+    let sessions = codex_home.join(format!("sessions/{date_path}"));
+    fs::create_dir_all(&sessions).unwrap();
+    let file = sessions.join(filename);
+    let sample = format!(
+        r#"{{"type": "event_msg", "timestamp": {ts_millis}, "payload": {{"type": "user_message", "message": "{content}"}}}}
+{{"type": "response_item", "timestamp": {}, "payload": {{"role": "assistant", "content": "{content}_response"}}}}"#,
+        ts_millis + 1000
+    );
+    fs::write(file, sample).unwrap();
+}
+
+/// Creates a Claude Code session with specific content.
+fn make_claude_session(
+    claude_home: &Path,
+    project_name: &str,
+    filename: &str,
+    content: &str,
+    ts_iso: &str,
+) {
+    let project = claude_home.join(format!("projects/{project_name}"));
+    fs::create_dir_all(&project).unwrap();
+    let file = project.join(filename);
+    let sample = format!(
+        r#"{{"type": "user", "timestamp": "{ts_iso}", "message": {{"role": "user", "content": "{content}"}}}}
+{{"type": "assistant", "timestamp": "{ts_iso}", "message": {{"role": "assistant", "content": "{content}_response"}}}}"#
+    );
+    fs::write(file, sample).unwrap();
+}
+
+/// Test: Multiple connectors can be indexed and searched together
+#[test]
+fn multi_connector_codex_and_claude() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Create sessions for both connectors with shared search term
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-multi.jsonl",
+        "multitest codex_unique_content",
+        1732118400000,
+    );
+    make_claude_session(
+        &claude_home,
+        "multi-project",
+        "session-multi.jsonl",
+        "multitest claude_unique_content",
+        "2024-11-20T10:00:00Z",
+    );
+
+    // Index all connectors
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Search for shared term - should find results from both connectors
+    let output = cargo_bin_cmd!("cass")
+        .args(["search", "multitest", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let hits = json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    // Should have hits from both connectors
+    let agents: std::collections::HashSet<_> = hits
+        .iter()
+        .filter_map(|h| h["agent"].as_str())
+        .collect();
+
+    assert!(
+        agents.contains("codex"),
+        "Should find codex results. Agents found: {:?}",
+        agents
+    );
+    assert!(
+        agents.contains("claude_code"),
+        "Should find claude_code results. Agents found: {:?}",
+        agents
+    );
+    assert!(
+        hits.len() >= 2,
+        "Should have at least 2 hits from different connectors"
+    );
+}
+
+/// Test: Agent filter isolates results to specific connector
+#[test]
+fn multi_connector_agent_filter_isolation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Create sessions with shared search term
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-iso.jsonl",
+        "isolationtest codex_data",
+        1732118400000,
+    );
+    make_claude_session(
+        &claude_home,
+        "iso-project",
+        "session-iso.jsonl",
+        "isolationtest claude_data",
+        "2024-11-20T10:00:00Z",
+    );
+
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Filter by codex only
+    let codex_output = cargo_bin_cmd!("cass")
+        .args([
+            "search",
+            "isolationtest",
+            "--agent",
+            "codex",
+            "--robot",
+            "--data-dir",
+        ])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(codex_output.status.success());
+    let codex_json: serde_json::Value =
+        serde_json::from_slice(&codex_output.stdout).expect("valid json");
+    let codex_hits = codex_json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    assert!(!codex_hits.is_empty(), "Should find codex hits");
+    for hit in codex_hits {
+        assert_eq!(
+            hit["agent"], "codex",
+            "All hits should be from codex when filtering"
+        );
+    }
+
+    // Filter by claude_code only
+    let claude_output = cargo_bin_cmd!("cass")
+        .args([
+            "search",
+            "isolationtest",
+            "--agent",
+            "claude_code",
+            "--robot",
+            "--data-dir",
+        ])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(claude_output.status.success());
+    let claude_json: serde_json::Value =
+        serde_json::from_slice(&claude_output.stdout).expect("valid json");
+    let claude_hits = claude_json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    assert!(!claude_hits.is_empty(), "Should find claude_code hits");
+    for hit in claude_hits {
+        assert_eq!(
+            hit["agent"], "claude_code",
+            "All hits should be from claude_code when filtering"
+        );
+    }
+}
+
+/// Test: Each connector's unique content is properly indexed
+#[test]
+fn multi_connector_unique_content() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Create sessions with unique content per connector
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-unique.jsonl",
+        "codexonly_xyzzy uniqueterm",
+        1732118400000,
+    );
+    make_claude_session(
+        &claude_home,
+        "unique-project",
+        "session-unique.jsonl",
+        "claudeonly_plugh uniqueterm",
+        "2024-11-20T10:00:00Z",
+    );
+
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Search for codex-specific term
+    let codex_output = cargo_bin_cmd!("cass")
+        .args(["search", "codexonly_xyzzy", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(codex_output.status.success());
+    let codex_json: serde_json::Value =
+        serde_json::from_slice(&codex_output.stdout).expect("valid json");
+    let codex_hits = codex_json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    assert!(
+        !codex_hits.is_empty(),
+        "Should find codex-specific content"
+    );
+    assert!(
+        codex_hits.iter().all(|h| h["agent"] == "codex"),
+        "Codex-specific search should only return codex results"
+    );
+
+    // Search for claude-specific term
+    let claude_output = cargo_bin_cmd!("cass")
+        .args(["search", "claudeonly_plugh", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(claude_output.status.success());
+    let claude_json: serde_json::Value =
+        serde_json::from_slice(&claude_output.stdout).expect("valid json");
+    let claude_hits = claude_json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    assert!(
+        !claude_hits.is_empty(),
+        "Should find claude-specific content"
+    );
+    assert!(
+        claude_hits.iter().all(|h| h["agent"] == "claude_code"),
+        "Claude-specific search should only return claude_code results"
+    );
+}
+
+/// Test: Aggregation by agent works with multiple connectors
+#[test]
+fn multi_connector_aggregation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Create multiple sessions per connector
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-agg1.jsonl",
+        "aggtest codex_first",
+        1732118400000,
+    );
+    make_codex_session(
+        &codex_home,
+        "2024/11/21",
+        "rollout-agg2.jsonl",
+        "aggtest codex_second",
+        1732204800000,
+    );
+    make_claude_session(
+        &claude_home,
+        "agg-project1",
+        "session-agg1.jsonl",
+        "aggtest claude_first",
+        "2024-11-20T10:00:00Z",
+    );
+    make_claude_session(
+        &claude_home,
+        "agg-project2",
+        "session-agg2.jsonl",
+        "aggtest claude_second",
+        "2024-11-21T10:00:00Z",
+    );
+
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Search with aggregation by agent
+    let output = cargo_bin_cmd!("cass")
+        .args([
+            "search",
+            "aggtest",
+            "--aggregate",
+            "agent",
+            "--robot",
+            "--data-dir",
+        ])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    eprintln!("DEBUG aggregation response: {}", stdout);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+
+    // Check aggregations exist
+    let aggregations = json.get("aggregations").and_then(|a| a.as_object());
+    assert!(
+        aggregations.is_some(),
+        "Should have aggregations in response. Full response: {}",
+        stdout
+    );
+
+    let aggs = aggregations.unwrap();
+    let agent_agg = aggs.get("agent").and_then(|a| a.as_object());
+    assert!(
+        agent_agg.is_some(),
+        "Should have agent aggregation. Aggregations: {:?}",
+        aggs
+    );
+
+    let agents = agent_agg.unwrap();
+    assert!(
+        agents.contains_key("codex"),
+        "Agent aggregation should include codex. Agents: {:?}",
+        agents
+    );
+    assert!(
+        agents.contains_key("claude_code"),
+        "Agent aggregation should include claude_code. Agents: {:?}",
+        agents
+    );
+}
+
+/// Test: Incremental indexing works across multiple connectors
+#[test]
+fn multi_connector_incremental_index() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Phase 1: Create initial sessions
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-incr1.jsonl",
+        "incrtest initial_codex",
+        1732118400000,
+    );
+    make_claude_session(
+        &claude_home,
+        "incr-project1",
+        "session-incr1.jsonl",
+        "incrtest initial_claude",
+        "2024-11-20T10:00:00Z",
+    );
+
+    // Full index
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Verify initial sessions indexed
+    let output1 = cargo_bin_cmd!("cass")
+        .args(["search", "incrtest", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    let json1: serde_json::Value = serde_json::from_slice(&output1.stdout).expect("valid json");
+    let hits1 = json1
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+    assert!(hits1.len() >= 2, "Should have initial sessions indexed");
+
+    // Phase 2: Add new sessions
+    std::thread::sleep(std::time::Duration::from_secs(2)); // Ensure mtime difference
+
+    make_codex_session(
+        &codex_home,
+        "2024/11/21",
+        "rollout-incr2.jsonl",
+        "incrtest new_codex",
+        1732204800000,
+    );
+    make_claude_session(
+        &claude_home,
+        "incr-project2",
+        "session-incr2.jsonl",
+        "incrtest new_claude",
+        "2024-11-21T10:00:00Z",
+    );
+
+    // Incremental index (no --full flag)
+    cargo_bin_cmd!("cass")
+        .args(["index", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Verify all sessions now indexed
+    let output2 = cargo_bin_cmd!("cass")
+        .args(["search", "incrtest", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    let json2: serde_json::Value = serde_json::from_slice(&output2.stdout).expect("valid json");
+    let hits2 = json2
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    // Should have both old and new sessions
+    assert!(
+        hits2.len() > hits1.len(),
+        "Incremental index should add new sessions"
+    );
+
+    // Check specific content
+    let has_initial = hits2
+        .iter()
+        .any(|h| h["content"].as_str().unwrap_or("").contains("initial"));
+    let has_new = hits2
+        .iter()
+        .any(|h| h["content"].as_str().unwrap_or("").contains("new"));
+
+    assert!(
+        has_initial,
+        "Should still have initial sessions after incremental index"
+    );
+    assert!(
+        has_new,
+        "Should have new sessions after incremental index"
+    );
+}
+
+/// Test: Multiple agent filter works correctly
+#[test]
+fn multi_connector_multiple_agent_filter() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let claude_home = home.join(".claude");
+    let data_dir = home.join("cass_data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-multi-agent.jsonl",
+        "multiagent codex_content",
+        1732118400000,
+    );
+    make_claude_session(
+        &claude_home,
+        "multi-agent-project",
+        "session-multi-agent.jsonl",
+        "multiagent claude_content",
+        "2024-11-20T10:00:00Z",
+    );
+
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Filter by multiple agents (both codex and claude_code)
+    let output = cargo_bin_cmd!("cass")
+        .args([
+            "search",
+            "multiagent",
+            "--agent",
+            "codex",
+            "--agent",
+            "claude_code",
+            "--robot",
+            "--data-dir",
+        ])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let hits = json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    // Should have hits from both specified agents
+    let agents: std::collections::HashSet<_> = hits
+        .iter()
+        .filter_map(|h| h["agent"].as_str())
+        .collect();
+
+    assert!(
+        agents.len() == 2 && agents.contains("codex") && agents.contains("claude_code"),
+        "Should find results from both specified agents. Found: {:?}",
+        agents
+    );
+}
+
+/// Test: Empty connector doesn't break indexing of other connectors
+#[test]
+fn multi_connector_empty_connector() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let home = tmp.path();
+    let codex_home = home.join(".codex");
+    let data_dir = home.join("cass_data");
+
+    // Only create data_dir and codex_home, leave claude_home empty/nonexistent
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let _guard_home = EnvGuard::set("HOME", home.to_string_lossy());
+    let _guard_codex = EnvGuard::set("CODEX_HOME", codex_home.to_string_lossy());
+
+    // Create only codex session
+    make_codex_session(
+        &codex_home,
+        "2024/11/20",
+        "rollout-only.jsonl",
+        "singleconnector codex_only",
+        1732118400000,
+    );
+
+    // Index should succeed even with non-existent claude_home
+    cargo_bin_cmd!("cass")
+        .args(["index", "--full", "--data-dir"])
+        .arg(&data_dir)
+        .env("CODEX_HOME", &codex_home)
+        .env("HOME", home)
+        .assert()
+        .success();
+
+    // Search should work and return codex results
+    let output = cargo_bin_cmd!("cass")
+        .args(["search", "singleconnector", "--robot", "--data-dir"])
+        .arg(&data_dir)
+        .env("HOME", home)
+        .output()
+        .expect("search command");
+
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json");
+    let hits = json
+        .get("hits")
+        .and_then(|h| h.as_array())
+        .expect("hits array");
+
+    assert!(!hits.is_empty(), "Should find codex results");
+    assert!(
+        hits.iter().all(|h| h["agent"] == "codex"),
+        "All results should be from codex"
+    );
+}
