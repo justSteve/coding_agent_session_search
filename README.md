@@ -59,6 +59,9 @@ Ingests history from all major local agents, normalizing them into a unified `Co
 - **Claude Code**: `~/.claude/projects` (Session JSONL)
 - **OpenCode**: `.opencode` directories (SQLite)
 - **Amp**: `~/.local/share/amp` & VS Code storage
+- **Cursor**: `~/Library/Application Support/Cursor/User/workspaceStorage` (Session JSON)
+- **ChatGPT**: `~/Library/Application Support/com.openai.chat` (Encrypted AES-256-GCM)
+- **Aider**: `~/.aider.chat.history.md` and `.aider.chat.history.md` files (Markdown)
 
 ---
 
@@ -89,24 +92,33 @@ classDiagram
     class GeminiConnector
     class OpenCodeConnector
     class AmpConnector
+    class CursorConnector
+    class ChatGptConnector
+    class AiderConnector
 
     Connector <|-- CodexConnector
     Connector <|-- ClaudeCodeConnector
     Connector <|-- GeminiConnector
     Connector <|-- OpenCodeConnector
     Connector <|-- AmpConnector
+    Connector <|-- CursorConnector
+    Connector <|-- ChatGptConnector
+    Connector <|-- AiderConnector
 
     CodexConnector ..> NormalizedConversation : emits
     ClaudeCodeConnector ..> NormalizedConversation : emits
     GeminiConnector ..> NormalizedConversation : emits
     OpenCodeConnector ..> NormalizedConversation : emits
     AmpConnector ..> NormalizedConversation : emits
+    CursorConnector ..> NormalizedConversation : emits
+    ChatGptConnector ..> NormalizedConversation : emits
+    AiderConnector ..> NormalizedConversation : emits
 
     classDef pastel fill:#f4f2ff,stroke:#c2b5ff,color:#2e2963;
     classDef pastelEdge fill:#e6f7ff,stroke:#9bd5f5,color:#0f3a4d;
     class Connector pastel
     class NormalizedConversation pastelEdge
-    class CodexConnector,ClaudeCodeConnector,GeminiConnector,OpenCodeConnector,AmpConnector pastel
+    class CodexConnector,ClaudeCodeConnector,GeminiConnector,OpenCodeConnector,AmpConnector,CursorConnector,ChatGptConnector,AiderConnector pastel
 ```
 
 - **Polymorphic Scanning**: The indexer iterates over a `Vec<Box<dyn Connector>>`, unaware of the underlying file formats (JSONL, SQLite, specialized JSON).
@@ -141,6 +153,9 @@ flowchart LR
       A4[Claude]:::pastel
       A5[OpenCode]:::pastel
       A6[Amp]:::pastel
+      A7[Cursor]:::pastel
+      A8[ChatGPT]:::pastel
+      A9[Aider]:::pastel
     end
 
     subgraph "Ingestion Layer"
@@ -163,6 +178,9 @@ flowchart LR
     A4 --> C1
     A5 --> C1
     A6 --> C1
+    A7 --> C1
+    A8 --> C1
+    A9 --> C1
     C1 -->|Persist| S1
     C1 -->|Index| T1
     S1 -.->|Rebuild| T1
@@ -309,6 +327,12 @@ The project ships with a robust installer (`install.sh` / `install.ps1`) designe
 - **Config**: Loads `.env` via `dotenvy::dotenv().ok()`; configure API/base paths there. Do not overwrite `.env`.
 
 - **Data Location**: Defaults to standard platform data directories (e.g., `~/.local/share/coding-agent-search`). Override with `CASS_DATA_DIR` or `--data-dir`.
+
+- **ChatGPT Decryption**: The ChatGPT macOS app stores conversations encrypted with AES-256-GCM. The encryption key is stored in macOS Keychain under an access group restricted to OpenAI-signed apps. To enable decryption, provide the key via:
+  - Environment variable: `CHATGPT_ENCRYPTION_KEY` (base64-encoded 32-byte key)
+  - Key file: `~/.config/cass/chatgpt_key.bin` or `~/.cass/chatgpt_key.bin` (raw 32 bytes)
+
+  Without the key, ChatGPT encrypted conversations (v3 format) are detected but skipped. Unencrypted legacy conversations (v2 format) are always indexed.
 
 - **Logs**: Written to `cass.log` (daily rotating) in the data directory.
 
