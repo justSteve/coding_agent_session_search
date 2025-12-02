@@ -1216,6 +1216,7 @@ async fn execute_cli(
         | Commands::Stats { .. }
         | Commands::Diag { .. }
         | Commands::Status { .. }
+        | Commands::Health { .. }
         | Commands::View { .. } => {
             tracing_subscriber::fmt()
                 .with_env_filter(filter)
